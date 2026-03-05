@@ -408,7 +408,7 @@ HeliosBench is a specialized benchmark for real-time long-video generation, plea
 
 ## 👍 Acknowledgement
 
-This project wouldn't be possible without the following open-sourced repositories: [Open-Sora Plan](https://github.com/PKU-YuanGroup/Open-Sora-Plan), [Ascend](https://www.hiascend.com), [Diffusers](https://github.com/huggingface/diffusers), [vLLM-Omni](https://github.com/vllm-project/vllm), [SGLang Diffusion](https://github.com/sgl-project/sglang), [Wan](https://github.com/Wan-Video/Wan2.1), [FramePack](https://github.com/lllyasviel/FramePack), [PyramidFlow](https://github.com/jy0205/Pyramid-Flow).
+This project wouldn't be possible without the following open-sourced repositories: [Open-Sora Plan](https://github.com/PKU-YuanGroup/Open-Sora-Plan), [Ascend](https://www.hiascend.com), [Diffusers](https://github.com/huggingface/diffusers), [vLLM-Omni](https://github.com/vllm-project/vllm), [SGLang Diffusion](https://github.com/sgl-project/sglang), [Wan](https://github.com/Wan-Video/Wan2.1), [FramePack](https://github.com/lllyasviel/FramePack), [PyramidFlow](https://github.com/jy0205/Pyramid-Flow), [DMD](https://github.com/tianweiy/DMD2).
 
 
 ## 🔒 License
