@@ -942,7 +942,14 @@ class HeliosTransformer3DModel(
     """
 
     _supports_gradient_checkpointing = True
-    _skip_layerwise_casting_patterns = ["patch_embedding", "condition_embedder", "norm"]
+    _skip_layerwise_casting_patterns = [
+        "patch_embedding",
+        "patch_short",
+        "patch_mid",
+        "patch_long",
+        "condition_embedder",
+        "norm",
+    ]
     _no_split_modules = ["HeliosTransformerBlock", "HeliosOutputNorm"]
     _keep_in_fp32_modules = [
         "time_embedder",
