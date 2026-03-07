@@ -123,17 +123,17 @@ bash install.sh
 Download models using huggingface-cli:
 ``` sh
 pip install "huggingface_hub[cli]"
-huggingface-cli download BestWishYSH/Helios-Base --local-dir BestWishYSH/Helios-Base
-huggingface-cli download BestWishYSH/Helios-Mid --local-dir BestWishYSH/Helios-Mid
-huggingface-cli download BestWishYSH/Helios-Distilled --local-dir BestWishYSH/HeliosDistillede
+huggingface-cli download BestWishYSH/Helios-Base --local-dir BestWishYsh/Helios-Base
+huggingface-cli download BestWishYSH/Helios-Mid --local-dir BestWishYsh/Helios-Mid
+huggingface-cli download BestWishYSH/Helios-Distilled --local-dir BestWishYsh/Helios-Distilled
 ```
 
 Download models using modelscope-cli:
 ``` sh
 pip install modelscope
-modelscope download BestWishYSH/Helios-Base --local_dir BestWishYSH/Helios-Base
-modelscope download BestWishYSH/Helios-Mid --local-dir BestWishYSH/Helios-Mid
-modelscope download BestWishYSH/Helios-Distilled --local-dir BestWishYSH/HeliosDistillede
+modelscope download BestWishYSH/Helios-Base --local_dir BestWishYsh/Helios-Base
+modelscope download BestWishYSH/Helios-Mid --local-dir BestWishYsh/Helios-Mid
+modelscope download BestWishYSH/Helios-Distilled --local-dir BestWishYsh/Helios-Distilled
 ```
 
 ## 🚀 Inference
