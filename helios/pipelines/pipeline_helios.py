@@ -465,7 +465,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             torch.eye(block_size, device=device) * (1 + gamma)
             - torch.ones(block_size, block_size, device=device) * gamma
         )
-        cov += torch.eye(block_size, device=device) * 1e-6
+        cov += torch.eye(block_size, device=device) * 1e-8
         cov = cov.float()  # Upcast to fp32 for numerical stability — cholesky is unreliable in fp16/bf16.
 
         L = torch.linalg.cholesky(cov)
