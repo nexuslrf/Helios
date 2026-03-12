@@ -257,9 +257,7 @@ def main(args):
         )
         noise_scheduler_copy = copy.deepcopy(noise_scheduler)
     else:
-        noise_scheduler = UniPCMultistepScheduler.from_pretrained(
-            "scripts/accelerate_configs/scheduler_config.json"
-        )
+        noise_scheduler = UniPCMultistepScheduler.from_pretrained("scripts/accelerate_configs/scheduler_config.json")
         noise_scheduler_copy = FlowMatchEulerDiscreteScheduler(num_train_timesteps=1000)
         if args.training_config.is_train_dmd:
             noise_scheduler.config.flow_shift = args.training_config.dmd_timestep_shift

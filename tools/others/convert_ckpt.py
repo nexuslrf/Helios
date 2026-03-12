@@ -49,13 +49,11 @@ BASE_DIRS = [
 for BASE_DIR in BASE_DIRS:
     index_path = os.path.join(BASE_DIR, "diffusion_pytorch_model.safetensors.index.json")
 
-
     def apply_rename(key: str) -> str:
         for old_prefix, new_prefix in RENAME_RULES:
             if key.startswith(old_prefix):
                 return new_prefix + key[len(old_prefix) :]
         return key
-
 
     print(f"[1/3] Reading {index_path} ...")
     with open(index_path, "r") as f:

@@ -1,19 +1,13 @@
-import os
-import subprocess
-import sys
-import time
 import tempfile
-import zipfile
-import torch
+import time
 
 import gradio as gr
 import spaces
-from diffusers import (
-    AutoencoderKLWan,
-    HeliosPyramidPipeline,
-    HeliosDMDScheduler
-)
+import torch
+
+from diffusers import AutoencoderKLWan, HeliosDMDScheduler, HeliosPyramidPipeline
 from diffusers.utils import export_to_video, load_image, load_video
+
 
 # ---------------------------------------------------------------------------
 # Pre-load model
@@ -23,11 +17,7 @@ MODEL_ID = "BestWishYsh/Helios-Distilled"
 vae = AutoencoderKLWan.from_pretrained(MODEL_ID, subfolder="vae", torch_dtype=torch.float32)
 scheduler = HeliosDMDScheduler.from_pretrained(MODEL_ID, subfolder="scheduler")
 pipe = HeliosPyramidPipeline.from_pretrained(
-    MODEL_ID, 
-    vae=vae, 
-    scheduler=scheduler,
-    torch_dtype=torch.bfloat16,
-    is_distilled=True
+    MODEL_ID, vae=vae, scheduler=scheduler, torch_dtype=torch.bfloat16, is_distilled=True
 )
 
 pipe.to("cuda")
@@ -50,6 +40,7 @@ except Exception:
 
 # compiled_transformer = compile_transformer()
 # spaces.aoti_apply(compiled_transformer, pipe.transformer)
+
 
 # ---------------------------------------------------------------------------
 # Generation
@@ -104,6 +95,7 @@ def generate_video(
     info = f"Generated in {elapsed:.1f}s · {num_frames} frames · {height}×{width}"
     return tmp.name, info
 
+
 # ---------------------------------------------------------------------------
 # UI Setup
 # ---------------------------------------------------------------------------
@@ -115,18 +107,19 @@ def update_conditional_visibility(mode):
     else:
         return gr.update(visible=False), gr.update(visible=False)
 
+
 CSS = """
 #header { text-align: center; margin-bottom: 1.5em; }
 #header h1 { font-size: 2.2em; margin-bottom: 0.2em; }
 .logo { max-height: 100px; margin: 0 auto 10px auto; display: block; }
 .link-buttons { display: flex; justify-content: center; gap: 15px; margin-top: 10px; }
-.link-buttons a { 
-    background-color: #2b3137; 
-    color: #ffffff !important; 
-    padding: 8px 20px; 
-    border-radius: 6px; 
-    text-decoration: none; 
-    font-weight: 600; 
+.link-buttons a {
+    background-color: #2b3137;
+    color: #ffffff !important;
+    padding: 8px 20px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
     font-size: 1em;
     transition: all 0.2s ease-in-out;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
@@ -135,11 +128,11 @@ CSS = """
 .contain { max-width: 1350px; margin: 0 auto !important; }
 """
 
-with gr.Blocks(css=CSS, title="Helios Video Generation", theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="Helios Video Generation") as demo:
     gr.HTML(
         """
         <div style='display: flex; align-items: center; justify-content: center; width: 100%;'>
-            <img src="https://github.com/PKU-YuanGroup/Helios-Page/blob/main/figures/logo_white.png?raw=true" style='width: 400px; height: auto;' />
+            <img src="https://raw.githubusercontent.com/SHYuanBest/shyuanbest_media/main/Helios/logo_white.png" style='width: 400px; height: auto;' />
         </div>
         <div id="header">
             <h1>🎬 Helios 14B Distilled: Real Real-Time Long Video Generation Model</h1>
@@ -149,6 +142,8 @@ with gr.Blocks(css=CSS, title="Helios Video Generation", theme=gr.themes.Soft())
             <div class="link-buttons">
                 <a href="https://github.com/PKU-YuanGroup/Helios" target="_blank">💻 Code</a>
                 <a href="https://pku-yuangroup.github.io/Helios-Page" target="_blank">📄 Page</a>
+                <a href="https://www.youtube.com/watch?v=vd_AgHtOUFQ" target="_blank">🎥 Main Feature</a>
+                <a href="https://www.youtube.com/watch?v=1GeIU2Dn7UY" target="_blank">⚡ Inference Speed</a>
             </div>
         </div>
         """
@@ -176,7 +171,7 @@ with gr.Blocks(css=CSS, title="Helios Video Generation", theme=gr.themes.Soft())
                     "of hard and soft corals in shades of red, orange, and green. The photo captures "
                     "the fish from a slightly elevated angle, emphasizing its lively movements and the "
                     "vivid colors of its surroundings. A close-up shot with dynamic movement."
-                )
+                ),
             )
             with gr.Accordion("Advanced Settings", open=False):
                 with gr.Row():
@@ -198,7 +193,18 @@ with gr.Blocks(css=CSS, title="Helios Video Generation", theme=gr.themes.Soft())
     mode.change(fn=update_conditional_visibility, inputs=[mode], outputs=[image_input, video_input])
     generate_btn.click(
         fn=generate_video,
-        inputs=[mode, prompt, image_input, video_input, height, width, num_frames, num_inference_steps, seed, is_amplify_first_chunk],
+        inputs=[
+            mode,
+            prompt,
+            image_input,
+            video_input,
+            height,
+            width,
+            num_frames,
+            num_inference_steps,
+            seed,
+            is_amplify_first_chunk,
+        ],
         outputs=[video_output, info_output],
     )
 
@@ -261,5 +267,4 @@ with gr.Blocks(css=CSS, title="Helios Video Generation", theme=gr.themes.Soft())
     )
 
 if __name__ == "__main__":
-    # demo.launch(share=True, allowed_paths=["./examples"])
-    demo.launch(share=True)
+    demo.launch(share=True, css=CSS, theme=gr.themes.Soft())

@@ -479,7 +479,16 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         width,
         patch_size: tuple[int, ...] = (1, 2, 2),
         device: torch.device | None = None,
+        generator: torch.Generator | None = None,
     ):
+        # NOTE: A generator must be provided to ensure correct and reproducible results.
+        # Creating a default generator here is a fallback only — without a fixed seed,
+        # the output will be non-deterministic and may produce incorrect results in CP context.
+        if generator is None:
+            generator = torch.Generator(device=device)
+        elif isinstance(generator, list):
+            generator = generator[0]
+
         gamma = self.scheduler.config.gamma
         _, ph, pw = patch_size
         block_size = ph * pw
@@ -488,13 +497,17 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
             torch.eye(block_size, device=device) * (1 + gamma)
             - torch.ones(block_size, block_size, device=device) * gamma
         )
-        cov += torch.eye(block_size, device=device) * 1e-6
-        dist = torch.distributions.MultivariateNormal(torch.zeros(block_size, device=device), covariance_matrix=cov)
-        block_number = batch_size * channel * num_frames * (height // ph) * (width // pw)
+        cov += torch.eye(block_size, device=device) * 1e-8
+        cov = cov.float()  # Upcast to fp32 for numerical stability — cholesky is unreliable in fp16/bf16.
 
-        noise = dist.sample((block_number,))  # [block number, block_size]
+        L = torch.linalg.cholesky(cov)
+        block_number = batch_size * channel * num_frames * (height // ph) * (width // pw)
+        z = torch.randn(block_number, block_size, generator=generator, device=generator.device).to(device=device)
+        noise = z @ L.T
+
         noise = noise.view(batch_size, channel, num_frames, height // ph, width // pw, ph, pw)
         noise = noise.permute(0, 1, 2, 3, 5, 4, 6).reshape(batch_size, channel, num_frames, height, width)
+
         return noise
 
     def stage1_sample(
@@ -656,7 +669,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 )
                 * 2
             )
-        latents = latents.reshape(batch_size, num_frmaes, num_channel, height, width).permute(0, 2, 1, 3, 4)
+        latents = latents.reshape(batch_size, num_frames, num_channel, height, width).permute(0, 2, 1, 3, 4)
 
         batch_size = latents.shape[0]
         start_point_list = None
@@ -690,10 +703,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 width *= 2
                 num_frames = latents.shape[2]
                 latents = latents.permute(0, 2, 1, 3, 4).reshape(
-                    batch_size * num_frmaes, num_channel, height // 2, width // 2
+                    batch_size * num_frames, num_channel, height // 2, width // 2
                 )
                 latents = F.interpolate(latents, size=(height, width), mode="nearest")
-                latents = latents.reshape(batch_size, num_frmaes, num_channel, height, width).permute(0, 2, 1, 3, 4)
+                latents = latents.reshape(batch_size, num_frames, num_channel, height, width).permute(0, 2, 1, 3, 4)
                 # Fix the stage
                 ori_sigma = 1 - self.scheduler.ori_start_sigmas[i_s]  # the original coeff of signal
                 gamma = self.scheduler.config.gamma
@@ -702,7 +715,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
 
                 batch_size, channel, num_frames, height, width = latents.shape
                 noise = self.sample_block_noise(
-                    batch_size, channel, num_frames, height, width, patch_size, device
+                    batch_size, channel, num_frames, height, width, patch_size, device, generator
                 )
                 noise = noise.to(device=device, dtype=transformer_dtype)
                 latents = alpha * latents + beta * noise  # To fix the block artifact
@@ -731,7 +744,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                     )[0]
 
                 if self.do_classifier_free_guidance:
-                    with self.transformer.cache_context("cond_uncond"):
+                    with self.transformer.cache_context("uncond"):
                         noise_uncond = self.transformer(
                             hidden_states=latents.to(transformer_dtype),
                             timestep=timestep,
@@ -1161,8 +1174,11 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
 
         if not is_enable_stage2:
             patch_size = self.transformer.config.patch_size
-            image_seq_len = num_latent_frames_per_chunk * (height // self.vae_scale_factor_spatial) * (width // self.vae_scale_factor_spatial) // (
-                patch_size[0] * patch_size[1] * patch_size[2]
+            image_seq_len = (
+                num_latent_frames_per_chunk
+                * (height // self.vae_scale_factor_spatial)
+                * (width // self.vae_scale_factor_spatial)
+                // (patch_size[0] * patch_size[1] * patch_size[2])
             )
             sigmas = np.linspace(0.999, 0.0, num_inference_steps + 1)[:-1] if sigmas is None else sigmas
             mu = calculate_shift(

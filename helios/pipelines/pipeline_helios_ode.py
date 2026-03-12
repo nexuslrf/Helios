@@ -439,15 +439,44 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         interpolated_prompt_embeds = list(x.chunk(interpolation_steps, dim=0))
         return interpolated_prompt_embeds
 
-    def sample_block_noise(self, batch_size, channel, num_frames, height, width):
-        gamma = self.scheduler.config.gamma
-        cov = torch.eye(4) * (1 + gamma) - torch.ones(4, 4) * gamma
-        dist = torch.distributions.MultivariateNormal(torch.zeros(4, device=cov.device), covariance_matrix=cov)
-        block_number = batch_size * channel * num_frames * (height // 2) * (width // 2)
+    def sample_block_noise(
+        self,
+        batch_size,
+        channel,
+        num_frames,
+        height,
+        width,
+        patch_size: tuple[int, ...] = (1, 2, 2),
+        device: torch.device | None = None,
+        generator: torch.Generator | None = None,
+    ):
+        # NOTE: A generator must be provided to ensure correct and reproducible results.
+        # Creating a default generator here is a fallback only — without a fixed seed,
+        # the output will be non-deterministic and may produce incorrect results in CP context.
+        if generator is None:
+            generator = torch.Generator(device=device)
+        elif isinstance(generator, list):
+            generator = generator[0]
 
-        noise = dist.sample((block_number,))  # [block number, 4]
-        noise = noise.view(batch_size, channel, num_frames, height // 2, width // 2, 2, 2)
+        gamma = self.scheduler.config.gamma
+        _, ph, pw = patch_size
+        block_size = ph * pw
+
+        cov = (
+            torch.eye(block_size, device=device) * (1 + gamma)
+            - torch.ones(block_size, block_size, device=device) * gamma
+        )
+        cov += torch.eye(block_size, device=device) * 1e-8
+        cov = cov.float()  # Upcast to fp32 for numerical stability — cholesky is unreliable in fp16/bf16.
+
+        L = torch.linalg.cholesky(cov)
+        block_number = batch_size * channel * num_frames * (height // ph) * (width // pw)
+        z = torch.randn(block_number, block_size, generator=generator, device=generator.device).to(device=device)
+        noise = z @ L.T
+
+        noise = noise.view(batch_size, channel, num_frames, height // ph, width // pw, ph, pw)
         noise = noise.permute(0, 1, 2, 3, 5, 4, 6).reshape(batch_size, channel, num_frames, height, width)
+
         return noise
 
     def stage1_sample(
@@ -606,6 +635,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         transformer_dtype: torch.dtype = None,
         scheduler_type: str = "unipc",  # unipc, euler
         use_dynamic_shifting: bool = False,
+        generator: torch.Generator | list[torch.Generator] | None = None,
         # ------------ CFG Zero ------------
         use_cfg_zero_star: Optional[bool] = False,
         use_zero_init: Optional[bool] = True,
@@ -617,7 +647,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         callback_on_step_end_tensor_inputs: list = None,
         progress_bar=None,
     ):
-        num_frmaes, height, width = (
+        num_frames, height, width = (
             latents.shape[-3],
             latents.shape[-2],
             latents.shape[-1],
@@ -634,7 +664,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 )
                 * 2
             )
-        latents = rearrange(latents, "(b t) c h w -> b c t h w", t=num_frmaes)
+        latents = rearrange(latents, "(b t) c h w -> b c t h w", t=num_frames)
 
         batch_size = latents.shape[0]
         if use_dmd:
@@ -675,7 +705,16 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 beta = alpha * (1 - ori_sigma) / math.sqrt(gamma)
 
                 batch_size, channel, num_frames, height, width = latents.shape
-                noise = self.sample_block_noise(batch_size, channel, num_frames, height, width)
+                noise = self.sample_block_noise(
+                    batch_size,
+                    channel,
+                    num_frames,
+                    height,
+                    width,
+                    self.transformer.config.patch_size,
+                    device,
+                    generator,
+                )
                 noise = noise.to(device=device, dtype=transformer_dtype)
                 latents = alpha * latents + beta * noise  # To fix the block artifact
 
@@ -1393,6 +1432,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         transformer_dtype=transformer_dtype,
                         scheduler_type=scheduler_type,
                         use_dynamic_shifting=use_dynamic_shifting,
+                        generator=generator,
                         # ------------ CFG Zero ------------
                         use_cfg_zero_star=use_cfg_zero_star,
                         use_zero_init=use_zero_init,

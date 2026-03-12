@@ -1,5 +1,5 @@
 <div align=center>
-<img src="https://github.com/PKU-YuanGroup/Helios-Page/blob/main/figures/logo_white.png?raw=true" width="300px">
+<img src="https://raw.githubusercontent.com/SHYuanBest/shyuanbest_media/main/Helios/logo_white.png" width="300px">
 </div>
 
 <h1 align="center">Helios: Real Real-Time Long Video Generation Model</h1>
@@ -19,9 +19,8 @@
 
 [![Ascend](https://img.shields.io/badge/Inference-Ascend--NPU-red)](https://www.hiascend.com/)
 [![Diffusers](https://img.shields.io/badge/Inference-Diffusers-blueviolet)](https://github.com/huggingface/diffusers/pull/13208)
-[![vLLM-Omni](https://img.shields.io/badge/Backend-vLLM--Omni-orange)](https://github.com/vllm-project/vllm-omni/pull/1604)
 [![SGLang Diffusion](https://img.shields.io/badge/Backend-SGLang--Diffusion-yellow)](https://github.com/sgl-project/sglang/pull/19782)
-
+[![vLLM-Omni](https://img.shields.io/badge/Backend-vLLM--Omni-orange)](https://github.com/vllm-project/vllm-omni/pull/1604)
 
 
 
@@ -58,14 +57,15 @@ or you can click <a href="https://github.com/PKU-YuanGroup/Helios-Page/blob/main
 
 ## 📣 Latest News!!
 
+* `[2026.03.08]` 👋 Helios now fully supports [Group Offloading](#-group-offloading-to-save-vram) and [Context Parallelism](#-context-parallelism-on-multiple-gpus)! These features significantly optimize VRAM (**only ~6GB**) usage and enable inference across multiple GPUs with *Ulysses Attention*, *Ring Attention*, *Unified Attention*, and *Ulysses Anything Attention*.
 * `[2026.03.06]` 🚀 [Cache-DiT](https://github.com/vipshop/cache-dit/pull/834) now supports Helios, it offers Fully Cache Acceleration and Parallelism support for Helios! Special thanks to the Cache-DiT Team for their amazing work.
 * `[2026.03.06]` 🚀 We fix the Parallel Inference logits for Helios, and provide an example [here](#-parallel-inference-on-multiple-gpus). Thanks [Cache-DiT Team](https://github.com/vipshop/cache-dit/pull/836). 
 * `[2026.03.06]` 👋 We official release the [Gradio Demo](https://huggingface.co/spaces/BestWishYsh/Helios-14B-RealTime), welcome to try it.
 * `[2026.03.05]` 👋 We are excited to announce the release of the Helios [technical report](https://arxiv.org/abs/2603.04379) on arXiv. We welcome discussions and feedback!
 * `[2026.03.04]` 🚀 Day-0 support for [Ascend-NPU](https://www.hiascend.com)，with sincere gratitude to the Ascend Team for their support.
 * `[2026.03.04]` 🚀 Day-0 support for [Diffusers](https://github.com/huggingface/diffusers/pull/13208)，with special thanks to the HuggingFace Team for their support.
-* `[2026.03.04]` 🚀 Day-0 support for [vLLM-Omni](https://github.com/vllm-project/vllm-omni/pull/1604)，with heartfelt gratitude to the vLLM Team for their support.
 * `[2026.03.04]` 🚀 Day-0 support for [SGLang-Diffusion](https://github.com/sgl-project/sglang/pull/19782)，with huge thanks to the SGLang Team for their support.
+* `[2026.03.04]` 🚀 Day-0 support for [vLLM-Omni](https://github.com/vllm-project/vllm-omni/pull/1604)，with heartfelt gratitude to the vLLM Team for their support.
 * `[2026.03.04]` 🔥 We've released the training/inference code and weights of **Helios-Base**, **Helios-Mid** and **Helios-Distilled**.
 
 
@@ -75,8 +75,8 @@ If your work has improved **Helios** and you would like more people to see it, p
 
 * [Ascend-NPU](https://www.hiascend.com/): Developed by Huawei, this hardware is designed for efficient AI model training and inference, boosting performance in tasks like computer vision, natural language processing, and autonomous driving.
 * [Diffusers](https://github.com/huggingface/diffusers/pull/13208): A popular library designed for working with diffusion models and other generative models in deep learning. It supports easy integration and manipulation of a wide range of generative models.
-* [vLLM-Omni](https://github.com/vllm-project/vllm-omni/pull/1604): A fully disaggregated serving system for any-to-any models. vLLM-Omni breaks complex architectures into a stage-based graph, using a decoupled backend to maximize resource efficiency and throughput.
 * [SGLang-Diffusion](https://github.com/sgl-project/sglang/pull/19782): An inference framework for accelerated image and video generation using diffusion models. It provides an end-to-end unified pipeline with optimized kernels and an efficient scheduler loop.
+* [vLLM-Omni](https://github.com/vllm-project/vllm-omni/pull/1604): A fully disaggregated serving system for any-to-any models. vLLM-Omni breaks complex architectures into a stage-based graph, using a decoupled backend to maximize resource efficiency and throughput.
 * [Cache-DiT](https://github.com/vipshop/cache-dit/pull/834): A PyTorch-native and Flexible Inference Engine with Hybrid Cache Acceleration and Parallelism for DiTs. It built on top of the Diffusers library and now supports nearly ALL DiTs from Diffusers.
 
 ## ⚙️ Requirements and Installation
@@ -117,7 +117,7 @@ bash install.sh
 > 💡Note: 
 > * All three models share the same architecture, but Helios-Mid and Helios-Distilled use a more aggressive multi-scale sampling pipeline to achieve better efficiency.
 > * Helios-Mid is an intermediate checkpoint generated in the process of distilling Helios-Base into Helios-Distilled, and may not meet expected quality.
-> * For Image-to-Video or Video-to-Video, since training is based on Text-to-Video, these two functions may be slightly inferior to Text-to-Video. You may enable `is_skip_first_chunk` if you find the first few chunks are static.
+> * For Image-to-Video or Video-to-Video, since training is based on Text-to-Video, these two functions may be slightly inferior to Text-to-Video. You may enable `is_skip_first_chunk` if you find the first few chunks are static or imporve the value of `image_noise_sigma_min`, `image_noise_sigma_max`, `video_noise_sigma_min`, and `video_noise_sigma_max`.
 
 
 Download models using huggingface-cli:
@@ -172,6 +172,10 @@ bash helios-mid_v2v.sh
 bash helios-distilled_t2v.sh
 bash helios-distilled_i2v.sh
 bash helios-distilled_v2v.sh
+
+# For Interactive
+# ⚠️ This feature is still under development — results may not always meet expectations
+cd scripts/inference/experiment_interactive
 ```
 
 ### Sanity Check
@@ -183,15 +187,46 @@ Before trying your own inputs, we highly recommend going through the sanity chec
 | **T2V** | <video src="https://github.com/user-attachments/assets/14e10753-0366-4790-ad8f-7b66d821ed11" controls width="240"></video> | <video src="https://github.com/user-attachments/assets/c1778691-a80b-428c-8094-88bb1dd1d52b" controls width="240"></video> | <video src="https://github.com/user-attachments/assets/4ca28c79-9dfa-49de-9c3a-f4c7b6c766cd" controls width="240"></video> |
 | **V2V** | <video src="https://github.com/user-attachments/assets/420cb572-85c2-42d8-98d7-37b0bc24c844" controls width="240"></video> | <video src="https://github.com/user-attachments/assets/7d703fa6-dc1a-4138-a897-e58cfd9236d6" controls width="240"></video> | <video src="https://github.com/user-attachments/assets/45329c55-1a25-459c-bbf0-4e584ec5b23d" controls width="240"></video> |
 
-### 🚀 Parallel Inference on Multiple GPUs
-For example, let's take Helios-Base with 2 GPUs.
+
+### ✨ Group Offloading to Save VRAM
+
+Helios supports group offloading to significantly reduce VRAM consumption, allowing you to run on GPU with limited memory footprint. For more details on the underlying mechanics, please refer to the [documentation](https://huggingface.co/docs/diffusers/main/en/optimization/memory#group-offloading).
+
+The Helios model below requires `~6GB of VRAM`.
 
 <details>
   <summary>Click to expand the code</summary>
 
   ```bash
-  CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node 2 infer_helios.py \
-      --enable_parallelism \
+  CUDA_VISIBLE_DEVICES=0 python infer_helios.py \
+      --base_model_path "BestWishYsh/Helios-Distilled" \
+      --transformer_path "BestWishYsh/Helios-Distilled" \
+      --sample_type "t2v" \
+      --prompt "A vibrant tropical fish swimming gracefully among colorful coral reefs in a clear, turquoise ocean. The fish has bright blue and yellow scales with a small, distinctive orange spot on its side, its fins moving fluidly. The coral reefs are alive with a variety of marine life, including small schools of colorful fish and sea turtles gliding by. The water is crystal clear, allowing for a view of the sandy ocean floor below. The reef itself is adorned with a mix of hard and soft corals in shades of red, orange, and green. The photo captures the fish from a slightly elevated angle, emphasizing its lively movements and the vivid colors of its surroundings. A close-up shot with dynamic movement." \
+      --num_frames 240 \
+      --guidance_scale 1.0 \
+      --is_enable_stage2 \
+      --pyramid_num_inference_steps_list 2 2 2 \
+      --is_amplify_first_chunk \
+      --output_folder "./output_helios/helios-distilled" \
+      --enable_low_vram_mode \
+      --group_offloading_type "leaf_level"
+  ```
+  
+</details>
+
+### ✨ Context Parallelism on Multiple GPUs
+Helios supports various Context Parallelism mechanisms, including `Ulysses Attention`, `Ring Attention`, `Unified Attention`, and `Ulysses Anything Attention`. For more details, please refer to the [documentation](https://huggingface.co/docs/diffusers/main/en/training/distributed_inference#context-parallelism).
+
+For example, let's take Helios-Base with 4 GPUs.
+
+<details>
+  <summary>Click to expand the code</summary>
+
+  ```bash
+  CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node 4 infer_helios.py \
+      --enable_parallelism \     #  remember to enable this config
+      --cp_backend "ulysses" \   #  ["ring", "ulysses", "unified", "ulysses_anything"]
       --base_model_path "BestWishYsh/Helios-Base" \
       --transformer_path "BestWishYsh/Helios-Base" \
       --sample_type "t2v" \
@@ -211,7 +246,101 @@ Install diffusers from source:
 pip install git+https://github.com/huggingface/diffusers.git
 ```
 
-For example, let's take Helios-Distilled.
+For example, let's take Helios-Distilled (**Standard Pipeline**).
+
+<details>
+  <summary>Click to expand the code</summary>
+
+  ```bash
+  import torch
+  from diffusers import AutoModel, HeliosPyramidPipeline
+  from diffusers.utils import export_to_video, load_video, load_image
+
+  vae = AutoModel.from_pretrained("BestWishYsh/Helios-Distilled", subfolder="vae", torch_dtype=torch.float32)
+
+  pipeline = HeliosPyramidPipeline.from_pretrained(
+      "BestWishYsh/Helios-Distilled",
+      vae=vae,
+      torch_dtype=torch.bfloat16
+  )
+  pipeline.to("cuda")
+
+  negative_prompt = """
+  Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality,
+  low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured,
+  misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards
+  """
+
+  # --- T2V ---
+  prompt = """
+  A vibrant tropical fish swimming gracefully among colorful coral reefs in a clear, turquoise ocean. The fish has bright blue 
+  and yellow scales with a small, distinctive orange spot on its side, its fins moving fluidly. The coral reefs are alive with 
+  a variety of marine life, including small schools of colorful fish and sea turtles gliding by. The water is crystal clear, 
+  allowing for a view of the sandy ocean floor below. The reef itself is adorned with a mix of hard and soft corals in shades 
+  of red, orange, and green. The photo captures the fish from a slightly elevated angle, emphasizing its lively movements and 
+  the vivid colors of its surroundings. A close-up shot with dynamic movement.
+  """
+
+  output = pipeline(
+      prompt=prompt,
+      negative_prompt=negative_prompt,
+      num_frames=240,
+      pyramid_num_inference_steps_list=[2, 2, 2],
+      guidance_scale=1.0,
+      is_amplify_first_chunk=True,
+      generator=torch.Generator("cuda").manual_seed(42),
+  ).frames[0]
+  export_to_video(output, "helios_distilled_t2v_output.mp4", fps=24)
+
+  # --- I2V ---
+  i2v_prompt = """
+  A towering emerald wave surges forward, its crest curling with raw power and energy. Sunlight glints off the translucent water, 
+  illuminating the intricate textures and deep green hues within the wave’s body. A thick spray erupts from the breaking crest, 
+  casting a misty veil that dances above the churning surface. As the perspective widens, the immense scale of the wave becomes 
+  apparent, revealing the restless expanse of the ocean stretching beyond. The scene captures the ocean’s untamed beauty and 
+  relentless force, with every droplet and ripple shimmering in the light. The dynamic motion and vivid colors evoke both awe and 
+  respect for nature’s might.
+  """
+  image_path = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/helios/wave.jpg"
+
+  output = pipeline(
+      prompt=i2v_prompt,
+      negative_prompt=negative_prompt,
+      image=load_image(image_path).resize((640, 384)),
+      num_frames=240,
+      pyramid_num_inference_steps_list=[2, 2, 2],
+      guidance_scale=1.0,
+      is_amplify_first_chunk=True,
+      generator=torch.Generator("cuda").manual_seed(42),
+  ).frames[0]
+  export_to_video(output, "helios_distilled_i2v_output.mp4", fps=24)
+
+  # --- V2V ---
+  v2v_prompt = """
+  A bright yellow Lamborghini Huracn Tecnica speeds along a curving mountain road, surrounded by lush green trees 
+  under a partly cloudy sky. The car's sleek design and vibrant color stand out against the natural backdrop, 
+  emphasizing its dynamic movement. The road curves gently, with a guardrail visible on one side, adding depth to 
+  the scene. The motion blur captures the sense of speed and energy, creating a thrilling and exhilarating atmosphere. 
+  A front-facing shot from a slightly elevated angle, highlighting the car's aggressive stance and the surrounding greenery.
+  """
+  video_path = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/helios/car.mp4"
+
+  output = pipeline(
+      prompt=v2v_prompt,
+      negative_prompt=negative_prompt,
+      video=load_video(video_path),
+      num_frames=240,
+      pyramid_num_inference_steps_list=[2, 2, 2],
+      guidance_scale=1.0,
+      is_amplify_first_chunk=True,
+      generator=torch.Generator("cuda").manual_seed(42),
+  ).frames[0]
+  export_to_video(output, "helios_distilled_v2v_output.mp4", fps=24)
+  ```
+
+</details>
+
+For example, let's take Helios-Distilled (**Modular Pipeline**).
 
 <details>
   <summary>Click to expand the code</summary>
@@ -422,6 +551,10 @@ bash scripts/training/train_deepspeed.sh
 ```
 
 Training configuration can be adjusted in `scripts/training/configs`. You can use `scripts/training/compare_yaml.py` to check for configuration completeness or differences between stages.
+
+### Model Merging
+
+After training, you can use this [script](https://github.com/PKU-YuanGroup/Helios/blob/main/tools/merge_lora.py) to merge all the checkpoints and obtain the final safetensors file, similar to [this](https://huggingface.co/BestWishYsh/Helios-Distilled/tree/main/transformer).
 
 
 ## 📊 HeliosBench

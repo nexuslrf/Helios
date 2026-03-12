@@ -1,5 +1,5 @@
 # <u>Evaluation Pipeline</u> by *Helios*
-This repository shows how to evaluate custom models described in the [Helios](https://arxiv.org/abs/XXXX.XXXXX) paper.
+This repository shows how to evaluate custom models described in the [Helios](https://arxiv.org/abs/2603.04379) paper.
 
 ## 🎉 Overview
 
