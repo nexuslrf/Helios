@@ -523,8 +523,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         callback_on_step_end: Callable[[int, int], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         progress_bar=None,
+        extra_transformer_kwargs: dict | None = None,
     ):
         batch_size = latents.shape[0]
+        extra = extra_transformer_kwargs or {}
 
         for i, t in enumerate(timesteps):
             if self.interrupt:
@@ -548,6 +550,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                     latents_history_long=latents_history_long.to(transformer_dtype),
                     attention_kwargs=attention_kwargs,
                     return_dict=False,
+                    **extra,
                 )[0]
 
             if self.do_classifier_free_guidance:
@@ -565,6 +568,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                         latents_history_long=latents_history_long.to(transformer_dtype),
                         attention_kwargs=attention_kwargs,
                         return_dict=False,
+                        **extra,
                     )[0]
 
                 if self.config.is_cfg_zero_star:
@@ -636,8 +640,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         callback_on_step_end: Callable[[int, int], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         progress_bar=None,
+        extra_transformer_kwargs: dict | None = None,
     ):
         batch_size, num_channel, num_frmaes, height, width = latents.shape
+        extra = extra_transformer_kwargs or {}
         latents = latents.permute(0, 2, 1, 3, 4).reshape(batch_size * num_frmaes, num_channel, height, width)
         for _ in range(pyramid_num_stages - 1):
             height //= 2
@@ -721,6 +727,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                         latents_history_short=latents_history_short.to(transformer_dtype),
                         latents_history_mid=latents_history_mid.to(transformer_dtype),
                         latents_history_long=latents_history_long.to(transformer_dtype),
+                        **extra,
                     )[0]
 
                 if self.do_classifier_free_guidance:
@@ -738,6 +745,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                             latents_history_short=latents_history_short.to(transformer_dtype),
                             latents_history_mid=latents_history_mid.to(transformer_dtype),
                             latents_history_long=latents_history_long.to(transformer_dtype),
+                            **extra,
                         )[0]
 
                     if self.config.is_cfg_zero_star:
