@@ -2,8 +2,8 @@ import importlib
 import os
 
 
-os.environ["HF_ENABLE_PARALLEL_LOADING"] = "yes"
-os.environ["HF_PARALLEL_LOADING_WORKERS"] = "8"
+# os.environ["HF_ENABLE_PARALLEL_LOADING"] = "yes"
+# os.environ["HF_PARALLEL_LOADING_WORKERS"] = "8"
 
 import argparse
 import time
@@ -168,7 +168,7 @@ def parse_args():
         default="4",
         help="The number of blocks to bundle together in each offloading group. Only relevant when using block-level offloading.",
     )
-
+    parser.add_argument("--base_seed", type=int, default=42)
     return parser.parse_args()
 
 
@@ -233,10 +233,10 @@ def main():
         transformer = replace_rmsnorm_with_fp32(transformer)
         transformer = replace_all_norms_with_flash_norms(transformer)
         replace_rope_with_flash_rope()
-    try:
-        transformer.set_attention_backend("_flash_3_hub")
-    except Exception:
-        transformer.set_attention_backend("flash_hub")
+    # try:
+    transformer.set_attention_backend("_flash_3")
+    # except Exception:
+        # transformer.set_attention_backend("flash_hub")
 
     vae = AutoencoderKLWan.from_pretrained(
         args.base_model_path,
@@ -355,6 +355,7 @@ def main():
                         use_interpolate_prompt=args.use_interpolate_prompt,
                         interpolation_steps=args.interpolation_steps,
                         interpolate_time_list=interpolate_time_list,
+                        base_seed=args.base_seed,
                     ).frames[0]
                 except Exception:
                     continue
@@ -526,6 +527,7 @@ def main():
                 use_interpolate_prompt=args.use_interpolate_prompt,
                 interpolation_steps=args.interpolation_steps,
                 interpolate_time_list=interpolate_time_list,
+                base_seed=args.base_seed,
             ).frames[0]
             # elapsed_time = time.time() - start_time
             # print(f"Inference time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")

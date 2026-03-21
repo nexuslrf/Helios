@@ -139,7 +139,7 @@ def load_video_tensor(path: str, height: int, width: int, num_frames: int) -> to
     elif video.shape[1] < num_frames:
         pad = video[:, -1:].expand(-1, num_frames - video.shape[1], -1, -1)
         video = torch.cat([video, pad], dim=1)
-
+    print(f"load_video_tensor: video.shape: {video.shape}")
     return video.unsqueeze(0)  # [1, C, T, H, W]
 
 
@@ -209,7 +209,7 @@ def main():
         transformer = replace_all_norms_with_flash_norms(transformer)
         replace_rope_with_flash_rope()
     try:
-        transformer.set_attention_backend("_flash_3_hub")
+        transformer.set_attention_backend("_flash_3")
     except Exception:
         transformer.set_attention_backend("flash_hub")
 
@@ -295,6 +295,7 @@ def main():
     # ------------------------------------------------------------------ #
     # Save output
     # ------------------------------------------------------------------ #
+    print(f"output.shape: {output.shape}")
     export_to_video(output, args.output_path, fps=args.fps)
     print(f"Saved output video to: {args.output_path}")
     print(f"Peak GPU memory: {torch.cuda.max_memory_allocated() / 1024**3:.3f} GB")

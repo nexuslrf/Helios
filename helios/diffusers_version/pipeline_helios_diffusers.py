@@ -649,15 +649,18 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         zero_steps: int | None = 1,
         # -------------- DMD --------------
         is_amplify_first_chunk: bool = False,
+        # ------------ Per-chunk seeding (scope-style) ------------
+        base_seed: int | None = None,
+        chunk_frame_offset: int = 0,
         # ------------ Callback ------------
         callback_on_step_end: Callable[[int, int], None] | PipelineCallback | MultiPipelineCallbacks | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         progress_bar=None,
         extra_transformer_kwargs: dict | None = None,
     ):
-        batch_size, num_channel, num_frmaes, height, width = latents.shape
+        batch_size, num_channel, num_frames, height, width = latents.shape
         extra = extra_transformer_kwargs or {}
-        latents = latents.permute(0, 2, 1, 3, 4).reshape(batch_size * num_frmaes, num_channel, height, width)
+        latents = latents.permute(0, 2, 1, 3, 4).reshape(batch_size * num_frames, num_channel, height, width)
         for _ in range(pyramid_num_stages - 1):
             height //= 2
             width //= 2
@@ -714,10 +717,14 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 beta = alpha * (1 - ori_sigma) / math.sqrt(gamma)
 
                 batch_size, channel, num_frames, height, width = latents.shape
+                if base_seed is not None:
+                    _block_gen = torch.Generator(device=device).manual_seed(base_seed + chunk_frame_offset + i_s)
+                else:
+                    _block_gen = generator
                 noise = self.sample_block_noise(
-                    batch_size, channel, num_frames, height, width, patch_size, device, generator
+                    batch_size, channel, num_frames, height, width, patch_size, device, _block_gen
                 )
-                noise = noise.to(device=device, dtype=transformer_dtype)
+                noise = noise.to(device=device, dtype=torch.float32)
                 latents = alpha * latents + beta * noise  # To fix the block artifact
 
                 if self.config.is_distilled:
@@ -889,6 +896,8 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         zero_steps: int | None = 1,
         # ------------ DMD ------------
         is_amplify_first_chunk: bool = False,
+        # ------------ Per-chunk seeding (scope-style) ------------
+        base_seed: int | None = None,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -1246,6 +1255,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                     :, :, -num_history_latent_frames:
                 ].split(history_sizes, dim=2)
 
+            if base_seed is not None:
+                _chunk_gen = torch.Generator(device=device).manual_seed(base_seed + total_generated_latent_frames)
+            else:
+                _chunk_gen = generator
             latents = self.prepare_latents(
                 batch_size,
                 num_channels_latents,
@@ -1254,7 +1267,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 window_num_frames,
                 dtype=torch.float32,
                 device=device,
-                generator=generator,
+                generator=_chunk_gen,
                 latents=None,
             )
 
@@ -1294,6 +1307,9 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                         zero_steps=zero_steps,
                         # -------------- DMD --------------
                         is_amplify_first_chunk=is_amplify_first_chunk and is_first_chunk,
+                        # ------------ Per-chunk seeding (scope-style) ------------
+                        base_seed=base_seed,
+                        chunk_frame_offset=total_generated_latent_frames,
                         # ------------ Callback ------------
                         callback_on_step_end=callback_on_step_end,
                         callback_on_step_end_tensor_inputs=callback_on_step_end_tensor_inputs,
@@ -1330,10 +1346,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 if keep_first_frame and (
                     (is_first_chunk and image_latents is None) or (is_skip_first_chunk and is_second_chunk)
                 ):
-                    image_latents = latents[:, :, 0:1, :, :]
+                    image_latents = latents[:, :, 0:1, :, :].to(torch.float32)
 
                 total_generated_latent_frames += latents.shape[2]
-                history_latents = torch.cat([history_latents, latents], dim=2)
+                history_latents = torch.cat([history_latents, latents.to(torch.float32)], dim=2)
                 real_history_latents = history_latents[:, :, -total_generated_latent_frames:]
                 current_latents = (
                     real_history_latents[:, :, -num_latent_frames_per_chunk:].to(vae_dtype) / latents_std

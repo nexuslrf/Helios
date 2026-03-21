@@ -176,12 +176,12 @@ class HeliosVACETransformerBlock(nn.Module):
             processor=HeliosAttnProcessor(),
             is_cross_attention=True,
         )
-        self.norm2 = FP32LayerNorm(dim, eps, elementwise_affine=True) if cross_attn_norm else nn.Identity()
+        self.norm2 = FP32LayerNorm(dim, eps, elementwise_affine=False) if cross_attn_norm else nn.Identity()
 
         # 4. Feed-forward
         self.ffn = FeedForward(dim, inner_dim=ffn_dim, activation_fn="gelu-approximate")
         # elementwise_affine=True: checkpoint stores norm3.weight + norm3.bias
-        self.norm3 = FP32LayerNorm(dim, eps, elementwise_affine=False)
+        self.norm3 = FP32LayerNorm(dim, eps, elementwise_affine=True)
 
         # 5. Optional output projection
         self.proj_out = nn.Linear(dim, dim) if apply_output_projection else None
@@ -199,7 +199,15 @@ class HeliosVACETransformerBlock(nn.Module):
     ):
         # --- optional input projection (fuses main stream into control) ---
         if self.proj_in is not None:
-            control_hidden_states = self.proj_in(control_hidden_states) + hidden_states
+            # When control and main streams have different sequence lengths (e.g. feature-3b:
+            # control processed at full latent resolution while main is at a downsampled
+            # pyramid stage), we can still apply proj_in but cannot add the main stream
+            # token-wise.  In that case we fall back to proj_in-only (no fusion).
+            projected = self.proj_in(control_hidden_states)
+            if projected.shape[1] == hidden_states.shape[1]:
+                control_hidden_states = projected + hidden_states
+            else:
+                control_hidden_states = projected
 
         # --- extract scale/shift from 4-D temb ---
         # temb: [B, seq_len, 6, inner_dim]  →  chunk on dim 2
@@ -472,9 +480,26 @@ class HeliosVACETransformer3DModel(
         latents_history_short=None,
         latents_history_mid=None,
         latents_history_long=None,
-        # ---- VACE control ----
+        # ---- VACE control (current chunk) ----
         control_hidden_states: torch.Tensor | None = None,   # [B, 96, T, H, W]
         control_hidden_states_scale: float | torch.Tensor = 1.0,
+        # ---- VACE feature flags ----
+        # Feature 1: temporal padding for the last (short) chunk.
+        #   "zero"       – pad post-embedding tokens with zeros (default, original behaviour).
+        #   "last_frame" – repeat the last latent frame before patch-embedding so the
+        #                  VACE stream sees a plausible signal instead of black frames.
+        vace_last_chunk_padding: str = "zero",
+        # Feature 2: inject VACE hints into history-token positions as well.
+        #   Requires control_hidden_states_history_short to be provided.
+        inject_hints_to_history: bool = False,
+        control_hidden_states_history_short: torch.Tensor | None = None,  # [B, 96, T_hist, H, W]
+        # Feature 3a: only inject hints when the current pyramid-stage resolution
+        #   matches the native control latent resolution; skip at lower-res stages.
+        vace_only_inject_at_full_resolution: bool = False,
+        # Feature 3b: process the VACE control stream at its native (full) latent
+        #   resolution, then resize the output hints down to the current pyramid-stage
+        #   token count.  Preserves more conditioning detail at lower pyramid stages.
+        vace_process_at_full_resolution: bool = False,
         return_dict: bool = True,
         attention_kwargs: dict[str, Any] | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
@@ -504,11 +529,13 @@ class HeliosVACETransformer3DModel(
         original_context_length = hidden_states.shape[1]
 
         # 3. Short history
+        hist_short_num_tokens = 0
         if latents_history_short is not None and indices_latents_history_short is not None:
             latents_history_short = latents_history_short.to(hidden_states)
             latents_history_short = self.patch_short(latents_history_short)
             _, _, _, H1, W1 = latents_history_short.shape
             latents_history_short = latents_history_short.flatten(2).transpose(1, 2)
+            hist_short_num_tokens = latents_history_short.shape[1]
 
             rotary_emb_short = self.rope(
                 frame_indices=indices_latents_history_short,
@@ -593,62 +620,200 @@ class HeliosVACETransformer3DModel(
         # ------------------------------------------------------------------ #
         # 7. VACE: process control stream → collect hints
         # ------------------------------------------------------------------ #
-        vace_hints = []   # list of (hint_tensor, scale) in forward order
+        vace_hints = []       # list of (hint_tensor, scale) — for current chunk
+        hist_short_hints = [] # list of (hint_tensor, scale) — for short history (feature 2)
+
         if control_hidden_states is not None:
-            # Resize control latents to the current pyramid stage resolution.
-            # In stage2_sample the latents are spatially downsampled; the control
-            # is always prepared at the full latent resolution, so we must match.
-            target_T = post_patch_num_frames * p_t
+            # Native (full latent) spatial dims of the control tensor.
+            ctrl_native_H = control_hidden_states.shape[3]
+            ctrl_native_W = control_hidden_states.shape[4]
             target_H = post_patch_height * p_h
             target_W = post_patch_width * p_w
-            if control_hidden_states.shape[2:] != torch.Size([target_T, target_H, target_W]):
-                control_hidden_states = F.interpolate(
-                    control_hidden_states.float(),
-                    size=(target_T, target_H, target_W),
-                    mode="trilinear",
-                    align_corners=False,
-                ).to(control_hidden_states.dtype)
 
-            # Embed 96-ch control latents (now at the correct pyramid resolution)
-            ctrl = self.vace_patch_embedding(control_hidden_states)  # [B, inner_dim, T', H', W']
-            ctrl = ctrl.flatten(2).transpose(1, 2)  # [B, ctrl_seq_len, inner_dim]
+            # ---- Feature 3a: skip injection at lower-resolution pyramid stages ----
+            at_lower_res = (ctrl_native_H > target_H) or (ctrl_native_W > target_W)
+            if vace_only_inject_at_full_resolution and at_lower_res:
+                pass  # leave vace_hints empty → no injection this call
 
-            # Pad control tokens to match original_context_length (handles short last chunk)
-            if ctrl.shape[1] < original_context_length:
-                padding = ctrl.new_zeros(batch_size, original_context_length - ctrl.shape[1], ctrl.shape[2])
-                ctrl = torch.cat([ctrl, padding], dim=1)
-
-            # RoPE for control tokens (same frame_indices as current chunk)
-            ctrl_rotary = self.rope(
-                frame_indices=indices_hidden_states,
-                height=post_patch_height,
-                width=post_patch_width,
-                device=ctrl.device,
-            )
-            ctrl_rotary = ctrl_rotary.flatten(2).transpose(1, 2)
-
-            # temb for the current chunk only (last original_context_length tokens)
-            temb_chunk = timestep_proj[:, -original_context_length:, :, :]  # [B, orig_len, 6, inner_dim]
-
-            # Current-chunk main hidden states (for proj_in fusion in block 0)
-            chunk_hidden = hidden_states[:, -original_context_length:]
-
-            for i, vace_block in enumerate(self.vace_blocks):
-                hint, ctrl = vace_block(
-                    chunk_hidden,
-                    encoder_hidden_states,
-                    ctrl,
-                    temb_chunk,
-                    ctrl_rotary,
-                )
-                # Scale: scalar or per-layer tensor
-                if isinstance(control_hidden_states_scale, torch.Tensor):
-                    scale = control_hidden_states_scale[i]
+            else:
+                # ---- Feature 3b / default: choose processing resolution ----
+                if vace_process_at_full_resolution and at_lower_res:
+                    # Process control at its native resolution; spatial dims for RoPE/patch.
+                    ctrl_proc_H = ctrl_native_H // p_h
+                    ctrl_proc_W = ctrl_native_W // p_w
+                    ctrl_for_embed = control_hidden_states
                 else:
-                    scale = control_hidden_states_scale
-                vace_hints.append((hint, scale))
+                    # Default: resize control to match the current pyramid-stage resolution.
+                    if at_lower_res:
+                        B, C, T, H, W = control_hidden_states.shape
+                        ctrl_4d = control_hidden_states.float().permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+                        ctrl_4d = F.interpolate(ctrl_4d, size=(target_H, target_W), mode="bilinear",
+                                                align_corners=False)
+                        control_hidden_states = (
+                            ctrl_4d.reshape(B, T, C, target_H, target_W)
+                            .permute(0, 2, 1, 3, 4)
+                            .to(control_hidden_states.dtype)
+                        )
+                    ctrl_proc_H = post_patch_height
+                    ctrl_proc_W = post_patch_width
+                    ctrl_for_embed = control_hidden_states
 
-            vace_hints = vace_hints[::-1]   # reverse so we can pop() in order
+                # Patch-embed and flatten → tokens
+                ctrl = self.vace_patch_embedding(ctrl_for_embed)  # [B, inner_dim, T', H', W']
+                ctrl = ctrl.flatten(2).transpose(1, 2)            # [B, ctrl_seq_len, inner_dim]
+
+                # ---- Feature 1: post-embedding padding for short last chunk ----
+                if ctrl.shape[1] < original_context_length:
+                    pad_tokens = original_context_length - ctrl.shape[1]
+                    if vace_last_chunk_padding == "last_frame":
+                        # Repeat the last spatial-frame worth of tokens.
+                        # One temporal frame = ctrl_proc_H * ctrl_proc_W tokens.
+                        frame_tokens = ctrl_proc_H * ctrl_proc_W
+                        last_frame_toks = ctrl[:, -frame_tokens:, :]   # [B, H'*W', D]
+                        reps = (pad_tokens + frame_tokens - 1) // frame_tokens
+                        filler = last_frame_toks.repeat(1, reps, 1)[:, :pad_tokens, :]
+                    else:  # "zero" (default)
+                        filler = ctrl.new_zeros(batch_size, pad_tokens, ctrl.shape[2])
+                    ctrl = torch.cat([ctrl, filler], dim=1)
+
+                # RoPE for control tokens.
+                # ctrl may have fewer temporal tokens than indices_hidden_states suggests
+                # (e.g. when the source video is shorter than the chunk window and
+                # vace_process_at_full_resolution skips the padding that would otherwise
+                # bring ctrl up to original_context_length).  Derive the actual temporal
+                # token count from ctrl.shape[1] and trim the frame indices accordingly so
+                # that ctrl_rotary.shape[1] == ctrl.shape[1].
+                ctrl_spatial_tokens = ctrl_proc_H * ctrl_proc_W
+                ctrl_T = ctrl.shape[1] // ctrl_spatial_tokens  # actual temporal frames in ctrl
+                ctrl_frame_indices = indices_hidden_states[:, :ctrl_T]
+                ctrl_rotary = self.rope(
+                    frame_indices=ctrl_frame_indices,
+                    height=ctrl_proc_H,
+                    width=ctrl_proc_W,
+                    device=ctrl.device,
+                )
+                ctrl_rotary = ctrl_rotary.flatten(2).transpose(1, 2)
+
+                # temb for the current chunk only.
+                # All chunk tokens share the same timestep, so when ctrl is at a different
+                # sequence length (feature 3b: full-res processing) we simply expand a
+                # single timestep slice rather than using the per-token projection directly.
+                ctrl_seq_len = ctrl.shape[1]
+                if ctrl_seq_len == original_context_length:
+                    temb_chunk = timestep_proj[:, -original_context_length:, :, :]
+                else:
+                    temb_chunk = timestep_proj[:, -1:, :, :].expand(-1, ctrl_seq_len, -1, -1)
+
+                # Current-chunk main hidden states (for proj_in fusion in block 0)
+                chunk_hidden = hidden_states[:, -original_context_length:]
+
+                for i, vace_block in enumerate(self.vace_blocks):
+                    hint, ctrl = vace_block(
+                        chunk_hidden,
+                        encoder_hidden_states,
+                        ctrl,
+                        temb_chunk,
+                        ctrl_rotary,
+                    )
+                    scale = (
+                        control_hidden_states_scale[i]
+                        if isinstance(control_hidden_states_scale, torch.Tensor)
+                        else control_hidden_states_scale
+                    )
+
+                    # ---- Feature 3b: resize hint from full-res to current pyramid res ----
+                    if vace_process_at_full_resolution and at_lower_res and hint is not None:
+                        B_h, L_h, D_h = hint.shape
+                        ctrl_proc_T = L_h // (ctrl_proc_H * ctrl_proc_W)
+                        hint = hint.reshape(B_h, ctrl_proc_T, ctrl_proc_H, ctrl_proc_W, D_h)
+                        hint = hint.permute(0, 4, 1, 2, 3)  # [B, D, T, H_full, W_full]
+                        # Spatial-only resize (trilinear with T fixed)
+                        hint = hint.reshape(B_h * D_h, ctrl_proc_T, ctrl_proc_H, ctrl_proc_W)
+                        hint = hint.unsqueeze(1)  # add channel dim for 3D interp
+                        hint = F.interpolate(
+                            hint, size=(ctrl_proc_T, post_patch_height, post_patch_width),
+                            mode="trilinear", align_corners=False,
+                        )
+                        hint = hint.squeeze(1).reshape(B_h, D_h, ctrl_proc_T,
+                                                       post_patch_height, post_patch_width)
+                        hint = hint.permute(0, 2, 3, 4, 1).reshape(B_h, -1, D_h)
+                        # Pad temporally if source ctrl had fewer frames than the chunk window
+                        if hint.shape[1] < original_context_length:
+                            pad_tokens = original_context_length - hint.shape[1]
+                            if vace_last_chunk_padding == "last_frame":
+                                frame_tokens = post_patch_height * post_patch_width
+                                last_frame_toks = hint[:, -frame_tokens:, :]
+                                reps = (pad_tokens + frame_tokens - 1) // frame_tokens
+                                filler = last_frame_toks.repeat(1, reps, 1)[:, :pad_tokens, :]
+                            else:
+                                filler = hint.new_zeros(B_h, pad_tokens, D_h)
+                            hint = torch.cat([hint, filler], dim=1)
+
+                    vace_hints.append((hint, scale))
+
+                vace_hints = vace_hints[::-1]   # reverse so we can pop() in forward order
+
+                # ---- Feature 2: compute VACE hints for short history tokens ----
+                if (
+                    inject_hints_to_history
+                    and hist_short_num_tokens > 0
+                    and control_hidden_states_history_short is not None
+                    and indices_latents_history_short is not None
+                ):
+                    ctrl_h = control_hidden_states_history_short
+
+                    ctrl_h = self.vace_patch_embedding(ctrl_h)     # [B, inner_dim, T', H', W']
+                    ctrl_h = ctrl_h.flatten(2).transpose(1, 2)     # [B, tokens, inner_dim]
+
+                    # Feature 1 — post-embedding padding for history control
+                    if ctrl_h.shape[1] < hist_short_num_tokens:
+                        pad_toks_h = hist_short_num_tokens - ctrl_h.shape[1]
+                        if vace_last_chunk_padding == "last_frame":
+                            frame_toks_h = post_patch_height * post_patch_width
+                            last_h = ctrl_h[:, -frame_toks_h:, :]
+                            reps_h = (pad_toks_h + frame_toks_h - 1) // frame_toks_h
+                            filler_h = last_h.repeat(1, reps_h, 1)[:, :pad_toks_h, :]
+                        else:
+                            filler_h = ctrl_h.new_zeros(batch_size, pad_toks_h, ctrl_h.shape[2])
+                        ctrl_h = torch.cat([ctrl_h, filler_h], dim=1)
+                    elif ctrl_h.shape[1] > hist_short_num_tokens:
+                        ctrl_h = ctrl_h[:, :hist_short_num_tokens]
+
+                    # RoPE for history control tokens
+                    ctrl_hist_rotary = self.rope(
+                        frame_indices=indices_latents_history_short,
+                        height=post_patch_height,
+                        width=post_patch_width,
+                        device=ctrl_h.device,
+                    )
+                    ctrl_hist_rotary = ctrl_hist_rotary.flatten(2).transpose(1, 2)
+
+                    # Use t=0 timestep embedding for history VACE (matches how history tokens
+                    # are conditioned in the main stream)
+                    history_context_length = hidden_states.shape[1] - original_context_length
+                    temb_hist = timestep_proj[:, history_context_length - hist_short_num_tokens
+                                               : history_context_length, :, :]
+
+                    # Main stream slice for proj_in fusion in block 0
+                    hist_short_main = hidden_states[:, history_context_length - hist_short_num_tokens
+                                                      : history_context_length]
+
+                    for i, vace_block in enumerate(self.vace_blocks):
+                        hint_h, ctrl_h = vace_block(
+                            hist_short_main,
+                            encoder_hidden_states,
+                            ctrl_h,
+                            temb_hist,
+                            ctrl_hist_rotary,
+                        )
+                        scale_h = (
+                            control_hidden_states_scale[i]
+                            if isinstance(control_hidden_states_scale, torch.Tensor)
+                            else control_hidden_states_scale
+                        )
+                        hist_short_hints.append((hint_h, scale_h))
+
+                    hist_short_hints = hist_short_hints[::-1]
 
         # ------------------------------------------------------------------ #
         # 8. Main transformer blocks (same logic as base model + hint injection)
@@ -678,13 +843,24 @@ class HeliosVACETransformer3DModel(
                     original_context_length,
                 )
 
-            if vace_hints and i in vace_layers_set:
-                hint, scale = vace_hints.pop()
-                if hint is not None:
-                    # Apply hint only to current-chunk tokens
-                    hidden_states[:, -original_context_length:] = (
-                        hidden_states[:, -original_context_length:] + hint * scale
-                    )
+            if i in vace_layers_set:
+                if vace_hints:
+                    hint, scale = vace_hints.pop()
+                    if hint is not None:
+                        # Apply hint only to current-chunk tokens
+                        hidden_states[:, -original_context_length:] = (
+                            hidden_states[:, -original_context_length:] + hint * scale
+                        )
+                # Feature 2: inject hints into short history token positions
+                if hist_short_hints:
+                    hint_h, scale_h = hist_short_hints.pop()
+                    if hint_h is not None and hist_short_num_tokens > 0:
+                        history_context_length = hidden_states.shape[1] - original_context_length
+                        hist_start = history_context_length - hist_short_num_tokens
+                        hist_end = history_context_length
+                        hidden_states[:, hist_start:hist_end] = (
+                            hidden_states[:, hist_start:hist_end] + hint_h * scale_h
+                        )
 
         # ------------------------------------------------------------------ #
         # 9. Output norm, projection, unpatchify

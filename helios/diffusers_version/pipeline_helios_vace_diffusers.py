@@ -201,10 +201,21 @@ class HeliosVACEPipeline(HeliosPipeline):
         zero_steps: int | None = 1,
         # ---- DMD ----
         is_amplify_first_chunk: bool = False,
-        # ---- VACE (new) ----
+        # ---- VACE ----
         control_video: torch.Tensor | None = None,   # [B, C, T, H, W]
         control_mask: torch.Tensor | None = None,    # [B, 1, T, H, W]
         conditioning_scale: float = 1.0,
+        # Feature 1: how to pad the last chunk when the control video doesn't fill
+        #   the full window ("zero" = pad with zeros, "last_frame" = repeat last frame).
+        vace_last_chunk_padding: str = "last_frame",
+        # Feature 2: also inject VACE hints into the short-history token positions.
+        inject_hints_to_history: bool = False,
+        # Feature 3a: only inject hints at the pyramid stage whose resolution matches
+        #   the native control-latent resolution; skip lower-res stages entirely.
+        vace_only_inject_at_full_resolution: bool = False,
+        # Feature 3b: run the VACE control stream at its native latent resolution and
+        #   resize the output hints to each pyramid stage's token count.
+        vace_process_at_full_resolution: bool = False,
     ):
         """Generate video with optional VACE conditioning.
 
@@ -297,6 +308,7 @@ class HeliosVACEPipeline(HeliosPipeline):
         _vace_latents = vace_latents_full
         _scale = conditioning_scale
         _chunk_counter = [0]   # mutable container for chunk index
+        _num_history_frames = sum(history_sizes)
 
         # Save originals
         _orig_stage1 = self.stage1_sample.__func__
@@ -304,35 +316,55 @@ class HeliosVACEPipeline(HeliosPipeline):
 
         pipeline_self = self  # capture for closures
 
+        def _build_vace_kwargs(chunk_idx: int) -> dict:
+            """Build extra_transformer_kwargs for one AR chunk."""
+            start = chunk_idx * window_latent_frames
+            end = start + window_latent_frames
+            dev = pipeline_self._execution_device
+            dtype = pipeline_self.transformer.dtype
+
+            ctrl_chunk = _vace_latents[:, :, start:end].to(device=dev, dtype=dtype)
+
+            extra: dict = {
+                "control_hidden_states": ctrl_chunk,
+                "control_hidden_states_scale": _scale,
+                "vace_last_chunk_padding": vace_last_chunk_padding,
+                "vace_only_inject_at_full_resolution": vace_only_inject_at_full_resolution,
+                "vace_process_at_full_resolution": vace_process_at_full_resolution,
+                "inject_hints_to_history": inject_hints_to_history,
+            }
+
+            # Feature 2: provide short-history VACE control latents.
+            # Short history covers the `history_sizes[-1]` most-recent latent frames
+            # immediately preceding the current chunk (plus, when keep_first_frame=True,
+            # the very first generated frame as a prefix).  We slice those from
+            # vace_latents_full using the same logic as the pipeline's history buffer.
+            if inject_hints_to_history:
+                hist_end = start                 # = chunk_idx * window_latent_frames
+                hist_short_size = history_sizes[-1]
+                hist_short_start = max(0, hist_end - hist_short_size)
+                ctrl_hist_short = _vace_latents[:, :, hist_short_start:hist_end].to(
+                    device=dev, dtype=dtype
+                )
+                if keep_first_frame and _vace_latents.shape[2] > 0:
+                    ctrl_prefix = _vace_latents[:, :, 0:1].to(device=dev, dtype=dtype)
+                    ctrl_hist_short = torch.cat([ctrl_prefix, ctrl_hist_short], dim=2)
+
+                extra["control_hidden_states_history_short"] = ctrl_hist_short
+
+            return extra
+
         def _stage1_with_vace(self_inner, *args, **kwargs):
             chunk_idx = _chunk_counter[0]
             _chunk_counter[0] += 1
-            start = chunk_idx * window_latent_frames
-            end = start + window_latent_frames
-            ctrl_chunk = _vace_latents[:, :, start:end].to(
-                device=pipeline_self._execution_device,
-                dtype=pipeline_self.transformer.dtype,
-            )
-            kwargs["extra_transformer_kwargs"] = {
-                "control_hidden_states": ctrl_chunk,
-                "control_hidden_states_scale": _scale,
-            }
+            kwargs["extra_transformer_kwargs"] = _build_vace_kwargs(chunk_idx)
             return _orig_stage1(self_inner, *args, **kwargs)
 
         def _stage2_with_vace(self_inner, *args, **kwargs):
             # stage2 is called once per chunk (all pyramid stages inside it)
             chunk_idx = _chunk_counter[0]
             _chunk_counter[0] += 1
-            start = chunk_idx * window_latent_frames
-            end = start + window_latent_frames
-            ctrl_chunk = _vace_latents[:, :, start:end].to(
-                device=pipeline_self._execution_device,
-                dtype=pipeline_self.transformer.dtype,
-            )
-            kwargs["extra_transformer_kwargs"] = {
-                "control_hidden_states": ctrl_chunk,
-                "control_hidden_states_scale": _scale,
-            }
+            kwargs["extra_transformer_kwargs"] = _build_vace_kwargs(chunk_idx)
             return _orig_stage2(self_inner, *args, **kwargs)
 
         # Bind the patched methods for this call
