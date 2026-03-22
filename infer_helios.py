@@ -233,10 +233,10 @@ def main():
         transformer = replace_rmsnorm_with_fp32(transformer)
         transformer = replace_all_norms_with_flash_norms(transformer)
         replace_rope_with_flash_rope()
-    # try:
-    transformer.set_attention_backend("_flash_3")
-    # except Exception:
-        # transformer.set_attention_backend("flash_hub")
+    try:
+        transformer.set_attention_backend("_flash_3")
+    except Exception:
+        transformer.set_attention_backend("flash_hub")
 
     vae = AutoencoderKLWan.from_pretrained(
         args.base_model_path,

@@ -724,7 +724,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 noise = self.sample_block_noise(
                     batch_size, channel, num_frames, height, width, patch_size, device, _block_gen
                 )
-                noise = noise.to(device=device, dtype=torch.float32)
+                noise = noise.to(device=device, dtype=transformer_dtype) # NOTE: maybe torch.float32?
                 latents = alpha * latents + beta * noise  # To fix the block artifact
 
                 if self.config.is_distilled:
@@ -1346,10 +1346,10 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                 if keep_first_frame and (
                     (is_first_chunk and image_latents is None) or (is_skip_first_chunk and is_second_chunk)
                 ):
-                    image_latents = latents[:, :, 0:1, :, :].to(torch.float32)
+                    image_latents = latents[:, :, 0:1, :, :] #.to(torch.float32)
 
                 total_generated_latent_frames += latents.shape[2]
-                history_latents = torch.cat([history_latents, latents.to(torch.float32)], dim=2)
+                history_latents = torch.cat([history_latents, latents], dim=2)
                 real_history_latents = history_latents[:, :, -total_generated_latent_frames:]
                 current_latents = (
                     real_history_latents[:, :, -num_latent_frames_per_chunk:].to(vae_dtype) / latents_std
