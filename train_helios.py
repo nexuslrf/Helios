@@ -365,13 +365,12 @@ def main(args):
             # add the input layer to the mix.
             if args.training_config.is_train_lora_patch_embedding and "patch_embedding" not in target_modules:
                 target_modules.append("patch_embedding")
-            if (
-                args.training_config.is_train_lora_clean_patch_embedding
-                and "clean_patch_embedding" not in target_modules
-            ):
-                target_modules.extend(
-                    ["clean_patch_embedding.proj", "clean_patch_embedding.proj_2x", "clean_patch_embedding.proj_4x"]
-                )
+
+            # add multi-term memory patches to the mix
+            if args.training_config.is_train_lora_multi_term_memory_patchg:
+                for patch_name in ["patch_short", "patch_mid", "patch_long"]:
+                    if patch_name not in target_modules:
+                        target_modules.append(patch_name)
         elif args.model_config.lora_layers == "all-linear":
             target_modules = set()
             for name, module in transformer.named_modules():
@@ -381,13 +380,12 @@ def main(args):
             # add the input layer to the mix.
             if args.training_config.is_train_lora_patch_embedding and "patch_embedding" not in target_modules:
                 target_modules.append("patch_embedding")
-            if (
-                args.training_config.is_train_lora_clean_patch_embedding
-                and "clean_patch_embedding" not in target_modules
-            ):
-                target_modules.extend(
-                    ["clean_patch_embedding.proj", "clean_patch_embedding.proj_2x", "clean_patch_embedding.proj_4x"]
-                )
+
+            # add multi-term memory patches to the mix
+            if args.training_config.is_train_lora_multi_term_memory_patchg:
+                for patch_name in ["patch_short", "patch_mid", "patch_long"]:
+                    if patch_name not in target_modules:
+                        target_modules.append(patch_name)
         target_modules = [t for t in target_modules if "norm" not in t]
     else:
         target_modules = args.model_config.lora_target_modules
@@ -410,8 +408,8 @@ def main(args):
 
     # set trainable parameter
     trainable_modules = []
-    if args.training_config.is_train_full_clean_patch_embedding:
-        trainable_modules.append("clean_patch_embedding")
+    if args.training_config.is_train_full_multi_term_memory_patchg:
+        trainable_modules.extend(["patch_short", "patch_mid", "patch_long"])
     if args.training_config.is_train_full_patch_embedding:
         trainable_modules.append("patch_embedding")
     if args.training_config.is_train_restrict_lora:
@@ -432,9 +430,13 @@ def main(args):
 
     # get fake score model
     if args.training_config.is_train_dmd:
-        critic_target_modules = [m for m in target_modules if m not in ["clean_patch_embedding", "patch_embedding"]]
+        critic_target_modules = [
+            m for m in target_modules if m not in ["patch_short", "patch_mid", "patch_long", "patch_embedding"]
+        ]
         critic_exclude_modules = list(args.model_config.lora_exclude_modules) + [
-            "clean_patch_embedding",
+            "patch_short",
+            "patch_mid",
+            "patch_long",
             "patch_embedding",
             "gan_heads",
             "gan_final_head",
@@ -1239,6 +1241,7 @@ def main(args):
                         latent_window_size=latent_window_size,
                         history_sizes=args.training_config.history_sizes,
                         is_random_drop=args.training_config.is_random_drop,
+                        random_drop_i2v_ratio=args.training_config.random_drop_i2v_ratio,
                         random_drop_v2v_ratio=args.training_config.random_drop_v2v_ratio,
                         random_drop_t2v_ratio=args.training_config.random_drop_t2v_ratio,
                         is_keep_x0=True,
@@ -2501,8 +2504,8 @@ if __name__ == "__main__":
 
     # ---------------------- For Wan ----------------------
     if (
-        conf.training_config.is_train_full_clean_patch_embedding
-        or conf.training_config.is_train_lora_clean_patch_embedding
+        conf.training_config.is_train_full_multi_term_memory_patchg
+        or conf.training_config.is_train_lora_multi_term_memory_patchg
         or conf.training_config.zero_history_timestep
     ):
         assert conf.training_config.has_multi_term_memory_patch, "Missing clean patch embedding configuration."
@@ -2521,10 +2524,10 @@ if __name__ == "__main__":
         )
 
     assert not (
-        conf.training_config.is_train_full_clean_patch_embedding
-        and conf.training_config.is_train_lora_clean_patch_embedding
+        conf.training_config.is_train_full_multi_term_memory_patchg
+        and conf.training_config.is_train_lora_multi_term_memory_patchg
     ), (
-        "Both 'is_train_full_clean_patch_embedding' and 'is_train_lora_clean_patch_embedding' cannot be True at the same time."
+        "Both 'is_train_full_multi_term_memory_patchg' and 'is_train_lora_multi_term_memory_patchg' cannot be True at the same time."
     )
     assert not (
         conf.training_config.is_train_full_patch_embedding and conf.training_config.is_train_lora_patch_embedding

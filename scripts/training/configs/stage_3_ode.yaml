@@ -150,8 +150,8 @@ training_config:
   is_train_full_patch_embedding: false
   is_train_lora_patch_embedding: false
   has_multi_term_memory_patch: true
-  is_train_full_clean_patch_embedding: false
-  is_train_lora_clean_patch_embedding: true
+  is_train_full_multi_term_memory_patchg: false
+  is_train_lora_multi_term_memory_patchg: true
   zero_history_timestep: true
   guidance_cross_attn: true
   restrict_self_attn: false

@@ -101,15 +101,23 @@ def parse_args():
         type=str,
         default=None,
     )
-    parser.add_argument("--image_noise_sigma_min", type=float, default=0.111, help="Balance motion amplitude and visual consistency")
-    parser.add_argument("--image_noise_sigma_max", type=float, default=0.135, help="Balance motion amplitude and visual consistency")
+    parser.add_argument(
+        "--image_noise_sigma_min", type=float, default=0.111, help="Balance motion amplitude and visual consistency"
+    )
+    parser.add_argument(
+        "--image_noise_sigma_max", type=float, default=0.135, help="Balance motion amplitude and visual consistency"
+    )
     parser.add_argument(
         "--video_path",
         type=str,
         default=None,
     )
-    parser.add_argument("--video_noise_sigma_min", type=float, default=0.111, help="Balance motion amplitude and visual consistency")
-    parser.add_argument("--video_noise_sigma_max", type=float, default=0.135, help="Balance motion amplitude and visual consistency")
+    parser.add_argument(
+        "--video_noise_sigma_min", type=float, default=0.111, help="Balance motion amplitude and visual consistency"
+    )
+    parser.add_argument(
+        "--video_noise_sigma_max", type=float, default=0.135, help="Balance motion amplitude and visual consistency"
+    )
     parser.add_argument(
         "--prompt",
         type=str,
@@ -233,9 +241,15 @@ def main():
         transformer = replace_rmsnorm_with_fp32(transformer)
         transformer = replace_all_norms_with_flash_norms(transformer)
         replace_rope_with_flash_rope()
-    try:
-        transformer.set_attention_backend("_flash_3")
-    except Exception:
+    cuda_major = torch.cuda.get_device_capability()[0]
+    if cuda_major >= 9:
+        # H100/H800 (SM90+) with FA3
+        try:
+            transformer.set_attention_backend("_flash_3")
+        except Exception:
+            transformer.set_attention_backend("flash_hub")
+    else:
+        # 4090/A100 etc (SM89+) with FA2
         transformer.set_attention_backend("flash_hub")
 
     vae = AutoencoderKLWan.from_pretrained(

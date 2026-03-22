@@ -167,21 +167,25 @@ def save_extra_components(args, model=None, model_state_dict=None, output_dir=No
     # Determine whether to use model or model_state_dict
     use_state_dict = model_state_dict is not None
 
-    # 1. Save clean_patch_embedding if it exists
+    # 1. Save patch_short, patch_mid, patch_long (formerly multi_term_memory_patchg)
     if args.training_config.is_enable_stage1 and (
-        args.training_config.is_train_full_clean_patch_embedding
-        or args.training_config.is_train_lora_clean_patch_embedding
+        args.training_config.is_train_full_multi_term_memory_patchg
+        or args.training_config.is_train_lora_multi_term_memory_patchg
     ):
+        patch_names = ["patch_short", "patch_mid", "patch_long"]
+
         if use_state_dict:
             # Extract from state_dict
             for k, v in model_state_dict.items():
-                if k.startswith("clean_patch_embedding."):
+                if any(k.startswith(f"{p}.") for p in patch_names):
                     state_dict[k] = v.detach().clone().cpu() if torch.is_tensor(v) else v
         else:
             # Extract from model
-            if hasattr(model, "clean_patch_embedding"):
-                for k, v in model.clean_patch_embedding.state_dict().items():
-                    state_dict["clean_patch_embedding." + k] = v.detach().clone().cpu()
+            for p in patch_names:
+                if hasattr(model, p):
+                    patch_module = getattr(model, p)
+                    for k, v in patch_module.state_dict().items():
+                        state_dict[f"{p}.{k}"] = v.detach().clone().cpu()
 
     # 2. Save LoRA layers from all transformer blocks
     if args.training_config.restrict_self_attn and args.training_config.is_train_restrict_lora:
@@ -244,27 +248,30 @@ def save_extra_components(args, model=None, model_state_dict=None, output_dir=No
 
 def load_extra_components(args, model, checkpoint_path):
     """
-    Load clean_patch_embedding, q_loras, k_loras, v_loras into the model
+    Load patch_short, patch_mid, patch_long, q_loras, k_loras, v_loras into the model
     """
     state_dict = torch.load(checkpoint_path, map_location="cpu")
     loaded_keys = set()
 
-    # Load clean_patch_embedding
+    # Load patch modules (formerly multi_term_memory_patchg)
     if args.training_config.is_enable_stage1:
-        clean_patch_keys_in_sd = [k for k in state_dict.keys() if k.startswith("clean_patch_embedding.")]
-        if clean_patch_keys_in_sd and hasattr(model, "clean_patch_embedding"):
-            clean_patch_state = {
-                k.replace("clean_patch_embedding.", ""): v
-                for k, v in state_dict.items()
-                if k.startswith("clean_patch_embedding.")
-            }
-            load_info = model.clean_patch_embedding.load_state_dict(clean_patch_state, strict=False)
-            loaded_keys.update(clean_patch_keys_in_sd)
-            print(f"Loaded {len(clean_patch_keys_in_sd)} parameters for clean_patch_embedding")
-            if load_info.missing_keys:
-                print(f"  Missing keys in clean_patch_embedding: {load_info.missing_keys}")
-            if load_info.unexpected_keys:
-                print(f"  Unexpected keys in clean_patch_embedding: {load_info.unexpected_keys}")
+        patch_names = ["patch_short", "patch_mid", "patch_long"]
+
+        for p_name in patch_names:
+            patch_keys_in_sd = [k for k in state_dict.keys() if k.startswith(f"{p_name}.")]
+            if patch_keys_in_sd and hasattr(model, p_name):
+                patch_state = {
+                    k.replace(f"{p_name}.", ""): v for k, v in state_dict.items() if k.startswith(f"{p_name}.")
+                }
+                patch_module = getattr(model, p_name)
+                load_info = patch_module.load_state_dict(patch_state, strict=False)
+                loaded_keys.update(patch_keys_in_sd)
+
+                print(f"Loaded {len(patch_keys_in_sd)} parameters for {p_name}")
+                if load_info.missing_keys:
+                    print(f"  Missing keys in {p_name}: {load_info.missing_keys}")
+                if load_info.unexpected_keys:
+                    print(f"  Unexpected keys in {p_name}: {load_info.unexpected_keys}")
 
     # Load LoRA layers
     lora_keys_count = 0

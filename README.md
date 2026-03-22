@@ -57,6 +57,9 @@ or you can click <a href="https://github.com/PKU-YuanGroup/Helios-Page/blob/main
 
 ## 📣 Latest News!!
 
+* `[2026.03.20]` 🚀 Helios now supports [Ahead-of-Time Compilation (AOTI)](https://huggingface.co/blog/zerogpu-aoti) on Spaces, with special thanks to the HuggingFace Team, especially [@Charles](https://github.com/cbensimon) and [@Sayak Paul](https://github.com/sayakpaul) for their great support! Please refer to [this Space](https://huggingface.co/spaces/BestWishYsh/Helios-14B-RealTime-AOTI) for a usage example.
+* `[2026.03.20]` 🔧 Based on [issue #38](https://github.com/PKU-YuanGroup/Helios/issues/38), we've identified several ways to further improve Helios's performance, such as fixing the i2v train-inference inconsistency and fully enabling Easy Anti-Drifting. Please refer to [commits](https://github.com/PKU-YuanGroup/Helios/commits/main/) and [correct.yaml](./scripts/training/configs/correct.yaml) for details.
+* `[2026.03.12]` ⚡️ Please note that real-time generation performance depends not only on the GPU, but also on the CPU, memory, CUDA driver version, etc. As [tested by a user](https://github.com/PKU-YuanGroup/Helios/issues/3#issuecomment-4034710182) on better hardware with single H100, Helios can reach up to **20.89 FPS**!
 * `[2026.03.08]` 👋 Helios now fully supports [Group Offloading](#-group-offloading-to-save-vram) and [Context Parallelism](#-context-parallelism-on-multiple-gpus)! These features significantly optimize VRAM (**only ~6GB**) usage and enable inference across multiple GPUs with *Ulysses Attention*, *Ring Attention*, *Unified Attention*, and *Ulysses Anything Attention*.
 * `[2026.03.06]` 🚀 [Cache-DiT](https://github.com/vipshop/cache-dit/pull/834) now supports Helios, it offers Fully Cache Acceleration and Parallelism support for Helios! Special thanks to the Cache-DiT Team for their amazing work.
 * `[2026.03.06]` 🚀 We fix the Parallel Inference logits for Helios, and provide an example [here](#-parallel-inference-on-multiple-gpus). Thanks [Cache-DiT Team](https://github.com/vipshop/cache-dit/pull/836). 
@@ -125,15 +128,15 @@ Download models using huggingface-cli:
 pip install "huggingface_hub[cli]"
 huggingface-cli download BestWishYSH/Helios-Base --local-dir BestWishYSH/Helios-Base
 huggingface-cli download BestWishYSH/Helios-Mid --local-dir BestWishYSH/Helios-Mid
-huggingface-cli download BestWishYSH/Helios-Distilled --local-dir BestWishYSH/HeliosDistillede
+huggingface-cli download BestWishYSH/Helios-Distilled --local-dir BestWishYSH/Helios-Distilled
 ```
 
 Download models using modelscope-cli:
 ``` sh
 pip install modelscope
 modelscope download BestWishYSH/Helios-Base --local_dir BestWishYSH/Helios-Base
-modelscope download BestWishYSH/Helios-Mid --local-dir BestWishYSH/Helios-Mid
-modelscope download BestWishYSH/Helios-Distilled --local-dir BestWishYSH/HeliosDistillede
+modelscope download BestWishYSH/Helios-Mid --local_dir BestWishYSH/Helios-Mid
+modelscope download BestWishYSH/Helios-Distilled --local_dir BestWishYSH/Helios-Distilled
 ```
 
 ## 🚀 Inference
