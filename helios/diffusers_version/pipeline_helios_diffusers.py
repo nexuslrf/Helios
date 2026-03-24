@@ -490,7 +490,7 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
             generator = generator[0]
 
         gamma = self.scheduler.config.gamma
-        _, ph, pw = patch_size
+        _, ph, pw = patch_size # _, 2, 2
         block_size = ph * pw
 
         cov = (
@@ -509,6 +509,32 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
         noise = noise.permute(0, 1, 2, 3, 5, 4, 6).reshape(batch_size, channel, num_frames, height, width)
 
         return noise
+
+    def sample_block_noise_cpu(
+        self,
+        batch_size,
+        channel,
+        num_frames,
+        height,
+        width,
+        patch_size: tuple[int, ...] = (1, 2, 2),
+        device: torch.device | None = None,
+        generator: torch.Generator | None = None,
+    ):
+        gamma = self.scheduler.config.gamma
+        _, ph, pw = patch_size
+        block_size = ph * pw
+
+        cov = torch.eye(block_size) * (1 + gamma) - torch.ones(block_size, block_size) * gamma # [block_size, block_size]
+        cov = cov + torch.eye(block_size) * 1e-6
+        dist = torch.distributions.MultivariateNormal(torch.zeros(block_size), covariance_matrix=cov)
+        block_number = batch_size * channel * num_frames * (height // ph) * (width // pw)
+
+        noise = dist.sample((block_number,)) # [block_number, block_size]
+        noise = noise.view(batch_size, channel, num_frames, height // ph, width // pw, ph, pw)
+        noise = noise.permute(0, 1, 2, 3, 5, 4, 6).reshape(batch_size, channel, num_frames, height, width)
+        return noise.to(device)
+
 
     def stage1_sample(
         self,
@@ -723,8 +749,11 @@ class HeliosPipeline(DiffusionPipeline, HeliosLoraLoaderMixin):
                     _block_gen = generator
                 noise = self.sample_block_noise(
                     batch_size, channel, num_frames, height, width, patch_size, device, _block_gen
-                )
-                noise = noise.to(device=device, dtype=transformer_dtype) # NOTE: maybe torch.float32?
+                ) #  [batch_size, channel, num_frames, height, width]
+                # rolling noise
+                # roll_offets = (chunk_frame_offset // num_frames) % num_frames
+                # noise = torch.roll(noise, roll_offets, dims=2)
+                noise = noise.to(device=device, dtype=torch.float32) # NOTE: maybe torch.float32?
                 latents = alpha * latents + beta * noise  # To fix the block artifact
 
                 if self.config.is_distilled:

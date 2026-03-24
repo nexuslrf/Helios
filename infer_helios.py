@@ -176,7 +176,7 @@ def parse_args():
         default="4",
         help="The number of blocks to bundle together in each offloading group. Only relevant when using block-level offloading.",
     )
-    parser.add_argument("--base_seed", type=int, default=42)
+    parser.add_argument("--base_seed", type=int, default=None)
     return parser.parse_args()
 
 
