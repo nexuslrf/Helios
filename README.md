@@ -45,19 +45,15 @@ This repository is the official implementation of Helios, which is a breakthroug
 
 ## 🎬 Video Demos
 
-<!-- <div align="center">
-  <video src="https://github.com/PKU-YuanGroup/Helios-Page/blob/main/videos/helios_features.mp4?raw=true" width="70%" controls="controls" poster=""></video>
-</div>
-
-or you can click <a href="https://www.youtube.com/watch?v=vd_AgHtOUFQ">here</a> to get the video. Some best prompts are [here](./example/prompt.txt). -->
-
 [![Demo Video of Helios](https://github.com/user-attachments/assets/1d10da4a-aba9-4ac1-ab02-cd0dfce8d35b)](https://www.youtube.com/watch?v=vd_AgHtOUFQ)
 or you can click <a href="https://github.com/PKU-YuanGroup/Helios-Page/blob/main/videos/helios_features.mp4">here</a> to get the video. Some best prompts are [here](./example/prompt.txt).
 
 
 ## 📣 Latest News!!
 
-* `[2026.03.20]` 🚀 Helios now supports [Ahead-of-Time Compilation (AOTI)](https://huggingface.co/blog/zerogpu-aoti) on Spaces, with special thanks to the HuggingFace Team, especially [@Charles](https://github.com/cbensimon) and [@Sayak Paul](https://github.com/sayakpaul) for their great support! Please refer to [this Space](https://huggingface.co/spaces/BestWishYsh/Helios-14B-RealTime-AOTI) for a usage example.
+* `[2026.03.24]` A community-made, unofficial YouTube tutorial for Helios is available [here](https://www.youtube.com/watch?v=AvFniggt6qg). It covers installation on a **consumer-grade PC** and supports **4K video generation**.
+
+* `[2026.03.20]` 🚀 Helios now supports [Ahead-of-Time Compilation (AOTI)](https://huggingface.co/blog/zerogpu-aoti) on Spaces, with special thanks to the HuggingFace Team! Please refer to [this Space](https://huggingface.co/spaces/BestWishYsh/Helios-14B-RealTime-AOTI) for a usage example.
 * `[2026.03.20]` 🔧 Based on [issue #38](https://github.com/PKU-YuanGroup/Helios/issues/38), we've identified several ways to further improve Helios's performance, such as fixing the i2v train-inference inconsistency and fully enabling Easy Anti-Drifting. Please refer to [commits](https://github.com/PKU-YuanGroup/Helios/commits/main/) and [correct.yaml](./scripts/training/configs/correct.yaml) for details.
 * `[2026.03.12]` ⚡️ Please note that real-time generation performance depends not only on the GPU, but also on the CPU, memory, CUDA driver version, etc. As [tested by a user](https://github.com/PKU-YuanGroup/Helios/issues/3#issuecomment-4034710182) on better hardware with single H100, Helios can reach up to **20.89 FPS**!
 * `[2026.03.08]` 👋 Helios now fully supports [Group Offloading](#-group-offloading-to-save-vram) and [Context Parallelism](#-context-parallelism-on-multiple-gpus)! These features significantly optimize VRAM (**only ~6GB**) usage and enable inference across multiple GPUs with *Ulysses Attention*, *Ring Attention*, *Unified Attention*, and *Ulysses Anything Attention*.
@@ -83,6 +79,10 @@ If your work has improved **Helios** and you would like more people to see it, p
 * [Cache-DiT](https://github.com/vipshop/cache-dit/pull/834): A PyTorch-native and Flexible Inference Engine with Hybrid Cache Acceleration and Parallelism for DiTs. It built on top of the Diffusers library and now supports nearly ALL DiTs from Diffusers.
 
 ## ⚙️ Requirements and Installation
+
+### Video Tutorial
+
+If you prefer a step-by-step walkthrough, check out this **community-made** [YouTube Tutorial](https://www.youtube.com/watch?v=AvFniggt6qg). It covers local installation, 4K video generation, and how to run Helios on a **consumer-grade PC**, along with other practical usage tips.
 
 ### Prepare Environment
 
