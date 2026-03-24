@@ -236,6 +236,7 @@ def main():
                     latent_window_size=args.latent_window_size,
                     is_keep_x0=True,
                     use_dynamic_shifting=args.use_dynamic_shifting,
+                    time_shift_type=args.time_shift_type,
                     # stage 2
                     is_enable_stage2=args.is_enable_stage2,
                     stage2_num_stages=args.stage2_num_stages,
@@ -354,6 +355,12 @@ def parse_args():
     parser.add_argument("--num_inference_steps", type=int, default=50)
     parser.add_argument("--guidance_scale", type=float, default=5.0)
     parser.add_argument("--use_dynamic_shifting", action="store_true")
+    parser.add_argument(
+        "--time_shift_type",
+        type=str,
+        default="linear",
+        choices=["exponential", "linear"],
+    )
     parser.add_argument("--vae_decode_type", type=str, default="default", choices=["default", "once", "default_fast"])
     # stage 1
     parser.add_argument("--latent_window_size", type=int, default=9)

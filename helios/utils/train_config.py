@@ -176,6 +176,10 @@ class TrainingConfig:
     mode_scale: float = field(default=1.29)
     # ---- Dynamic Shifting ----
     use_dynamic_shifting: bool = field(default=False)
+    time_shift_type: str = field(
+        default="linear",
+        metadata={"choices": ["exponential", "linear"]},
+    )
     base_seq_len: Optional[int] = field(default=256)
     max_seq_len: Optional[int] = field(default=4096)
     base_shift: Optional[float] = field(default=0.5)

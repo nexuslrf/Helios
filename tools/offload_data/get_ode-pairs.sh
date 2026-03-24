@@ -63,6 +63,7 @@ echo -e "\033[31mDISTRIBUTED_ARGS: ${DISTRIBUTED_ARGS}\033[0m"
 torchrun $DISTRIBUTED_ARGS \
     tools/offload_data/get_ode-pairs.py \
     --use_dynamic_shifting \
+    --time_shift_type "linear" \
     --use_default_loader \
     --is_enable_stage2 \
     --num_frames 165

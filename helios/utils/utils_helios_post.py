@@ -1,6 +1,6 @@
 import math
 import random
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -40,6 +40,7 @@ def _ode_regression_loss(
     # For ODE Main
     last_step_only: bool = False,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     is_backward_grad: bool = False,
     ode_regression_weight: float = 0.25,
     ode_latents: torch.Tensor = None,
@@ -167,6 +168,7 @@ def _ode_regression_loss(
                         max_seq_len=args.training_config.max_seq_len,
                         base_shift=args.training_config.base_shift,
                         max_shift=args.training_config.max_shift,
+                        time_shift_type=time_shift_type,
                     )
                     temp_timesteps_per_stage = scheduler.timesteps_per_stage[i_s].min() + temp_sigmas_per_stage * (
                         scheduler.timesteps_per_stage[i_s].max() - scheduler.timesteps_per_stage[i_s].min()
@@ -963,6 +965,7 @@ def inference_with_trajectory_stage2(
     sigmas: torch.Tensor = None,
     timesteps: torch.Tensor = None,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     num_critic_input_frames: int = 21,
     num_rollout_sections: int = 3,
     is_skip_first_section: bool = False,
@@ -1218,6 +1221,7 @@ def inference_with_trajectory_stage2(
                     max_seq_len=args.training_config.max_seq_len,
                     base_shift=args.training_config.base_shift,
                     max_shift=args.training_config.max_shift,
+                    time_shift_type=time_shift_type,
                 )
 
                 temp_timesteps = scheduler.timesteps_per_stage[i_s].min() + temp_sigmas[:-1] * (
@@ -1419,6 +1423,7 @@ def consistency_backward_simulation(
     timesteps: torch.Tensor = None,
     timestep_shift: float = 1.0,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     num_critic_input_frames: int = 21,
     num_rollout_sections: int = 3,
     is_skip_first_section: bool = False,
@@ -1474,6 +1479,7 @@ def consistency_backward_simulation(
     if is_enable_stage2:
         stage2_kwargs = {
             "use_dynamic_shifting": use_dynamic_shifting,
+            "time_shift_type": time_shift_type,
             # Stage 2
             "stage2_num_stages": stage2_num_stages,
             "stage2_num_inference_steps_list": stage2_num_inference_steps_list,
@@ -1517,6 +1523,7 @@ def run_generator(
     timesteps: torch.Tensor = None,
     timestep_shift: float = 1.0,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     num_critic_input_frames: int = 21,
     num_rollout_sections: int = 3,
     is_skip_first_section: bool = False,
@@ -1564,6 +1571,7 @@ def run_generator(
             timesteps=timesteps,
             timestep_shift=timestep_shift,
             use_dynamic_shifting=use_dynamic_shifting,
+            time_shift_type=time_shift_type,
             num_critic_input_frames=num_critic_input_frames,
             num_rollout_sections=num_rollout_sections,
             is_skip_first_section=is_skip_first_section,
@@ -2161,6 +2169,7 @@ def _generator_loss(
     num_train_timestep: int = 1000,
     timestep_shift: float = 1,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     fake_guidance_scale: float = 0.0,
     real_guidance_scale: float = 3.0,
     num_critic_input_frames: int = 21,
@@ -2269,6 +2278,7 @@ def _generator_loss(
             max_seq_len=args.training_config.max_seq_len,
             base_shift=args.training_config.base_shift,
             max_shift=args.training_config.max_shift,
+            time_shift_type=time_shift_type,
             return_mu=True,
         )
     elif timestep_shift > 1:
@@ -2366,6 +2376,7 @@ def _generator_loss(
             timesteps=timesteps,
             timestep_shift=timestep_shift,
             use_dynamic_shifting=use_dynamic_shifting,
+            time_shift_type=time_shift_type,
             num_critic_input_frames=num_critic_input_frames,
             num_rollout_sections=num_rollout_sections,
             is_skip_first_section=is_skip_first_section,
@@ -2804,6 +2815,7 @@ def _critic_loss(
     num_train_timestep: int = 1000,
     timestep_shift: float = 1.0,
     use_dynamic_shifting: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     num_critic_input_frames: int = 21,
     num_rollout_sections: int = 3,
     is_skip_first_section: bool = False,
@@ -2881,6 +2893,7 @@ def _critic_loss(
             max_seq_len=args.training_config.max_seq_len,
             base_shift=args.training_config.base_shift,
             max_shift=args.training_config.max_shift,
+            time_shift_type=time_shift_type,
             return_mu=True,
         )
     elif timestep_shift > 1:
@@ -2989,6 +3002,7 @@ def _critic_loss(
             timesteps=timesteps,
             timestep_shift=timestep_shift,
             use_dynamic_shifting=use_dynamic_shifting,
+            time_shift_type=time_shift_type,
             num_critic_input_frames=num_critic_input_frames,
             num_rollout_sections=num_rollout_sections,
             is_skip_first_section=is_skip_first_section,

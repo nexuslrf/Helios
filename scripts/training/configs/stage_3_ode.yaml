@@ -114,6 +114,7 @@ training_config:
   mode_scale: 1.29
   # ---- Dynamic Shifting Parameters ----
   use_dynamic_shifting: true
+  time_shift_type: "linear"
   base_seq_len: 256
   max_seq_len: 4096
   base_shift: 0.5

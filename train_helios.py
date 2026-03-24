@@ -1407,6 +1407,7 @@ def main(args):
                         # For ODE Main
                         last_step_only=args.training_config.dmd_last_step_only,
                         use_dynamic_shifting=args.training_config.use_dynamic_shifting,
+                        time_shift_type=args.training_config.time_shift_type,
                         is_backward_grad=True,
                         ode_regression_weight=args.training_config.ode_regression_weight,
                         ode_latents=ode_latents,
@@ -1504,6 +1505,7 @@ def main(args):
                                 # For ODE Main
                                 last_step_only=args.training_config.dmd_last_step_only,
                                 use_dynamic_shifting=args.training_config.use_dynamic_shifting,
+                                time_shift_type=args.training_config.time_shift_type,
                                 is_backward_grad=True,
                                 ode_regression_weight=args.training_config.ode_regression_weight,
                                 ode_latents=ode_latents,
@@ -1549,6 +1551,7 @@ def main(args):
                             last_section_grad_only=args.training_config.dmd_last_section_grad_only,
                             timestep_shift=args.training_config.dmd_timestep_shift,
                             use_dynamic_shifting=args.training_config.use_dynamic_shifting,
+                            time_shift_type=args.training_config.time_shift_type,
                             fake_guidance_scale=args.training_config.fake_guidance_scale,
                             real_guidance_scale=args.training_config.real_guidance_scale,
                             num_critic_input_frames=args.training_config.num_critic_input_frames,
@@ -1739,6 +1742,7 @@ def main(args):
                         last_section_grad_only=args.training_config.dmd_last_section_grad_only,
                         timestep_shift=args.training_config.dmd_timestep_shift,
                         use_dynamic_shifting=args.training_config.use_dynamic_shifting,
+                        time_shift_type=args.training_config.time_shift_type,
                         num_critic_input_frames=args.training_config.num_critic_input_frames,
                         num_rollout_sections=num_rollout_sections,
                         is_skip_first_section=args.training_config.is_skip_first_section,
@@ -2166,6 +2170,7 @@ def main(args):
                                     "history_sizes": args.training_config.history_sizes,
                                     "latent_window_size": args.validation_config.validation_latent_window_size[0],
                                     "use_dynamic_shifting": args.training_config.use_dynamic_shifting,
+                                    "time_shift_type": args.training_config.time_shift_type,
                                     "is_keep_x0": True,
                                     "use_kv_cache": args.validation_config.use_kv_cache,
                                     # For Stage 2
@@ -2377,6 +2382,7 @@ def main(args):
                         "history_sizes": args.training_config.history_sizes,
                         "latent_window_size": args.validation_config.validation_latent_window_size[0],
                         "use_dynamic_shifting": args.training_config.use_dynamic_shifting,
+                        "time_shift_type": args.training_config.time_shift_type,
                         "is_keep_x0": True,
                         "use_kv_cache": args.validation_config.use_kv_cache,
                         # For Stage 2

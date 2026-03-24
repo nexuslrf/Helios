@@ -16,7 +16,7 @@ import html
 import math
 from enum import Enum
 from itertools import accumulate
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import regex as re
 import torch
@@ -496,8 +496,6 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         attention_kwargs: Optional[dict] = None,
         device: Optional[torch.device] = None,
         transformer_dtype: torch.dtype = None,
-        scheduler_type: str = "unipc",
-        use_dynamic_shifting: bool = False,
         generator: Optional[torch.Generator] = None,
         # ------------ CFG Zero ------------
         use_cfg_zero_star: Optional[bool] = False,
@@ -635,6 +633,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         transformer_dtype: torch.dtype = None,
         scheduler_type: str = "unipc",  # unipc, euler
         use_dynamic_shifting: bool = False,
+        time_shift_type: Literal["exponential", "linear"] = "linear",
         generator: torch.Generator | list[torch.Generator] | None = None,
         # ------------ CFG Zero ------------
         use_cfg_zero_star: Optional[bool] = False,
@@ -766,6 +765,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     max_seq_len=self.scheduler.config.get("max_image_seq_len", 4096),
                     base_shift=self.scheduler.config.get("base_shift", 0.5),
                     max_shift=self.scheduler.config.get("max_shift", 1.15),
+                    time_shift_type=time_shift_type,
                 )
                 temp_timesteps = self.scheduler.timesteps_per_stage[i_s].min() + temp_sigmas[:-1] * (
                     self.scheduler.timesteps_per_stage[i_s].max() - self.scheduler.timesteps_per_stage[i_s].min()
@@ -967,6 +967,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         history_sizes: list = [16, 2, 1],
         latent_window_size: int = 9,
         use_dynamic_shifting: bool = False,
+        time_shift_type: Literal["exponential", "linear"] = "linear",
         is_keep_x0: bool = True,
         # ------------ Stage 2 ------------
         is_enable_stage2: bool = False,
@@ -1391,6 +1392,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         max_seq_len=self.scheduler.config.get("max_image_seq_len", 4096),
                         base_shift=self.scheduler.config.get("base_shift", 0.5),
                         max_shift=self.scheduler.config.get("max_shift", 1.15),
+                        time_shift_type=time_shift_type,
                     )
                     timesteps = sigmas * 1000.0  # rescale to [0, 1000.0)
                     timesteps = timesteps.to(device)
@@ -1432,6 +1434,7 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         transformer_dtype=transformer_dtype,
                         scheduler_type=scheduler_type,
                         use_dynamic_shifting=use_dynamic_shifting,
+                        time_shift_type=time_shift_type,
                         generator=generator,
                         # ------------ CFG Zero ------------
                         use_cfg_zero_star=use_cfg_zero_star,
@@ -1463,8 +1466,6 @@ class HeliosPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         attention_kwargs=attention_kwargs,
                         device=device,
                         transformer_dtype=transformer_dtype,
-                        scheduler_type=scheduler_type,
-                        use_dynamic_shifting=use_dynamic_shifting,
                         generator=generator,
                         # ------------ CFG Zero ------------
                         use_cfg_zero_star=use_cfg_zero_star,

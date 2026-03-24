@@ -3,7 +3,7 @@ import html
 import math
 import os
 import random
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import ftfy
 import regex as re
@@ -521,7 +521,6 @@ def calculate_shift(
     max_seq_len: int = 4096,
     base_shift: float = 0.5,
     max_shift: float = 1.15,
-    exp_max=7.0,
 ):
     m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
     b = base_shift - m * base_seq_len
@@ -538,7 +537,7 @@ def apply_schedule_shift(
     base_shift: float = 0.5,
     max_shift: float = 1.15,
     exp_max: float = 7.0,
-    is_exponential: bool = False,
+    time_shift_type: Literal["exponential", "linear"] = "linear",
     mu: float = None,
     return_mu: bool = False,
 ):
@@ -551,9 +550,8 @@ def apply_schedule_shift(
             max_seq_len if max_seq_len is not None else 4096,
             base_shift if base_shift is not None else 0.5,
             max_shift if max_shift is not None else 1.15,
-            exp_max if exp_max is not None else 7.0,
         )
-        if is_exponential:
+        if time_shift_type == "exponential":
             mu = min(mu, math.log(exp_max))
             mu = math.exp(mu)
 
