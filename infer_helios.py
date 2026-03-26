@@ -160,6 +160,20 @@ def parse_args():
         help="Context parallel backend to use.",
     )
 
+    # === FSDP2 (composable fully-sharded data parallel) ===
+    # Shards transformer parameters across GPUs to cut per-GPU param memory by
+    # ~1/world_size.  Each block's params are all-gathered one at a time during
+    # the forward pass and freed immediately after, saving significant VRAM.
+    # Compatible with Ulysses CP: FSDP2 all-gather (block-level) and Ulysses
+    # all-to-all (inside attention) are strictly sequential.
+    # Apply BEFORE CP: --enable_fsdp2 must be used with --enable_parallelism.
+    parser.add_argument(
+        "--enable_fsdp2",
+        action="store_true",
+        help="Enable FSDP2 parameter sharding across GPUs for lower per-GPU memory. "
+             "Requires --enable_parallelism. Requires PyTorch >= 2.2.",
+    )
+
     # === Group-Offloading ===
     # Please refer to https://huggingface.co/docs/diffusers/v0.37.0/en/optimization/memory#group-offloading
     parser.add_argument("--enable_low_vram_mode", action="store_true")
@@ -247,10 +261,12 @@ def main():
         try:
             transformer.set_attention_backend("_flash_3")
         except Exception:
-            transformer.set_attention_backend("flash_hub")
+            transformer.set_attention_backend("flash")
     else:
         # 4090/A100 etc (SM89+) with FA2
-        transformer.set_attention_backend("flash_hub")
+        transformer.set_attention_backend("flash")
+
+    print(f"Attention backend: {transformer.blocks[1].attn1.processor._attention_backend}")
 
     vae = AutoencoderKLWan.from_pretrained(
         args.base_model_path,
@@ -301,6 +317,22 @@ def main():
         )
     else:
         pipe = pipe.to(device)
+
+    # Apply FSDP2 BEFORE context parallel so that FSDP2 hooks (param all-gather)
+    # register on each block before the diffusers CP hooks (sequence split).
+    # Execution order per block forward:
+    #   1. FSDP2 pre-hook  → all-gather block params
+    #   2. Diffusers pre-hook → split hidden_states by cp_size
+    #   3. block.forward()  → full params + local seq shard; Ulysses all-to-all inside attn
+    #   4. FSDP2 post-hook  → re-shard (free) block params
+    if world_size > 1 and getattr(args, "enable_fsdp2", False):
+        if not args.enable_parallelism:
+            raise ValueError("--enable_fsdp2 requires --enable_parallelism.")
+        from helios.diffusers_version.fsdp2_utils import apply_fsdp2_to_transformer
+
+        print(f"[rank {rank}] Applying FSDP2: sharding transformer params across {world_size} GPUs ...")
+        apply_fsdp2_to_transformer(pipe.transformer, param_dtype=args.weight_dtype)
+        print(f"[rank {rank}] FSDP2 applied.")
 
     if world_size > 1 and args.enable_parallelism:
         if args.cp_backend == "ring":
