@@ -22,7 +22,7 @@ import torch.nn.functional as F
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
+from diffusers.models._modeling_parallel import ContextParallelInput
 from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.cache_utils import CacheMixin
@@ -460,20 +460,25 @@ class HeliosTransformerBlock(nn.Module):
 
         # 2. Cross-attention
         if self.guidance_cross_attn:
-            history_seq_len = hidden_states.shape[1] - original_context_length
-
+            # In CP mode the outer forward() passes a per-rank local_original_context_length so
+            # that history_seq_len correctly equals the number of history tokens on this rank.
+            # When H=C (stage2 with equal history/current) rank 0 holds only history tokens and
+            # current_seq_len=0; skip cross-attention on that rank to avoid empty-sequence errors.
+            history_seq_len = max(0, hidden_states.shape[1] - original_context_length)
+            current_seq_len = hidden_states.shape[1] - history_seq_len
             history_hidden_states, hidden_states = torch.split(
-                hidden_states, [history_seq_len, original_context_length], dim=1
+                hidden_states, [history_seq_len, current_seq_len], dim=1
             )
-            norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
-            attn_output = self.attn2(
-                norm_hidden_states,
-                encoder_hidden_states,
-                None,
-                None,
-                original_context_length,
-            )
-            hidden_states = hidden_states + attn_output
+            if current_seq_len > 0:
+                norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
+                attn_output = self.attn2(
+                    norm_hidden_states,
+                    encoder_hidden_states,
+                    None,
+                    None,
+                    original_context_length,
+                )
+                hidden_states = hidden_states + attn_output
             hidden_states = torch.cat([history_hidden_states, hidden_states], dim=1)
         else:
             norm_hidden_states = self.norm2(hidden_states.float()).type_as(hidden_states)
@@ -556,21 +561,16 @@ class HeliosTransformer3DModel(
     _keys_to_ignore_on_load_unexpected = ["norm_added_q"]
     _repeated_blocks = ["HeliosTransformerBlock"]
     _cp_plan = {
-        # Input split at attn level and ffn level.
-        "blocks.*.attn1": {
-            "hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
-            "rotary_emb": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
-        },
-        "blocks.*.attn2": {
-            "hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
-        },
-        "blocks.*.ffn": {
+        # Split hidden_states once at block-0 entry.  timestep_proj, rotary_emb, and temb are
+        # pre-split in forward() so that all 40 blocks operate on local sequence shards throughout,
+        # avoiding the 120 scatter/gather round-trips of the per-sub-module plan.
+        # The gather back to full sequence is done manually in forward() after the block loop,
+        # BEFORE norm_out, so that norm_out's [:, -original_context_length:] slice works correctly
+        # even when history tokens (H) are present (stage2).
+        "blocks.0": {
             "hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
         },
-        # Output gather at attn level and ffn level.
-        **{f"blocks.{i}.attn1": ContextParallelOutput(gather_dim=1, expected_dims=3) for i in range(40)},
-        **{f"blocks.{i}.attn2": ContextParallelOutput(gather_dim=1, expected_dims=3) for i in range(40)},
-        **{f"blocks.{i}.ffn": ContextParallelOutput(gather_dim=1, expected_dims=3) for i in range(40)},
+        # No output gather here – handled explicitly in forward().
     }
 
     @register_to_config
@@ -788,6 +788,39 @@ class HeliosTransformer3DModel(
         hidden_states = hidden_states.contiguous()
         encoder_hidden_states = encoder_hidden_states.contiguous()
         rotary_emb = rotary_emb.contiguous()
+
+        # Pre-split sequence-length-dependent tensors for CP mode so that all 40 blocks operate
+        # on local shards without repeated scatter/gather.  hidden_states is split by the blocks.0
+        # CP hook; timestep_proj, rotary_emb, and temb are pre-split here because they are
+        # re-passed as the same (full) outer variable on every block iteration.
+        _cp_active = False
+        _block_original_context_length = original_context_length  # used in block loop below
+        if (
+            getattr(self, "_parallel_config", None) is not None
+            and self._parallel_config.context_parallel_config is not None
+        ):
+            _cp_active = True
+            cp_ctx = self._parallel_config.context_parallel_config
+            cp_group = cp_ctx._flattened_mesh.get_group()
+            cp_size = torch.distributed.get_world_size(cp_group)
+            cp_rank = torch.distributed.get_rank(cp_group)
+
+            # With a uniform [H+C] split, rank 0 holds all H history tokens while later ranks
+            # hold only current tokens.  Compute the per-rank "local original context length"
+            # so that guidance_cross_attn inside each block correctly separates history from
+            # current tokens using: history_seq_len = local_shard_len - local_original_context_length.
+            _total_seq_len = hidden_states.shape[1]  # H+C before blocks.0 hook fires
+            _local_shard_len = _total_seq_len // cp_size
+            _shard_start = cp_rank * _local_shard_len
+            _local_history_len = max(
+                0, min(history_context_length, _shard_start + _local_shard_len) - _shard_start
+            )
+            _block_original_context_length = _local_shard_len - _local_history_len
+
+            timestep_proj = timestep_proj.chunk(cp_size, dim=1)[cp_rank]
+            rotary_emb = rotary_emb.chunk(cp_size, dim=1)[cp_rank]
+            temb = temb.chunk(cp_size, dim=1)[cp_rank]
+
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for block in self.blocks:
                 hidden_states = self._gradient_checkpointing_func(
@@ -796,7 +829,7 @@ class HeliosTransformer3DModel(
                     encoder_hidden_states,
                     timestep_proj,
                     rotary_emb,
-                    original_context_length,
+                    _block_original_context_length,
                 )
         else:
             for block in self.blocks:
@@ -805,8 +838,21 @@ class HeliosTransformer3DModel(
                     encoder_hidden_states,
                     timestep_proj,
                     rotary_emb,
-                    original_context_length,
+                    _block_original_context_length,
                 )
+
+        # 6.5 Re-gather CP shards before norm_out so that norm_out's
+        # [:, -original_context_length:] slice correctly isolates current tokens.
+        # Without this, each rank only holds (H+C)/N tokens; when H>0 the slice
+        # over-selects, causing the unpatchify "-1" dim to absorb extra tokens
+        # and produce wrong channel counts (e.g. 32 instead of 16).
+        if _cp_active:
+            all_hs = [torch.empty_like(hidden_states) for _ in range(cp_size)]
+            torch.distributed.all_gather(all_hs, hidden_states, group=cp_group)
+            hidden_states = torch.cat(all_hs, dim=1)
+            all_temb = [torch.empty_like(temb) for _ in range(cp_size)]
+            torch.distributed.all_gather(all_temb, temb, group=cp_group)
+            temb = torch.cat(all_temb, dim=1)
 
         # 7. Normalization
         hidden_states = self.norm_out(hidden_states, temb, original_context_length)
