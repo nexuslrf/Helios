@@ -435,6 +435,12 @@ class HeliosTransformerBlock(nn.Module):
             shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
                 self.scale_shift_table.unsqueeze(0) + temb.float()
             ).chunk(6, dim=2)
+            # # Keep scale_shift in model dtype (bf16) to avoid materialising a ~1.3 GiB
+            # # float32 intermediate at full resolution.  norm1 below still runs in fp32.
+            # _sst = self.scale_shift_table.to(dtype=temb.dtype).unsqueeze(0)
+            # shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = (
+            #     _sst + temb
+            # ).chunk(6, dim=2)
             # batch_size, seq_len, 1, inner_dim
             shift_msa = shift_msa.squeeze(2)
             scale_msa = scale_msa.squeeze(2)

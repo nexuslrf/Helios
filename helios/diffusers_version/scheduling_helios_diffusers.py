@@ -200,6 +200,7 @@ class HeliosScheduler(SchedulerMixin, ConfigMixin):
         sigmas: bool | None = None,
         mu: bool | None = None,
         is_amplify_first_chunk: bool = False,
+        start_sigma: float | None = None,
     ):
         """
         Setting the timesteps and sigmas for each stage
@@ -232,7 +233,8 @@ class HeliosScheduler(SchedulerMixin, ConfigMixin):
             )
 
             stage_sigmas = self.sigmas_per_stage[stage_index]
-            ratios = np.linspace(stage_sigmas[0].item(), stage_sigmas[-1].item(), num_inference_steps)
+            sigma_start = start_sigma if start_sigma is not None else stage_sigmas[0].item()
+            ratios = np.linspace(sigma_start, stage_sigmas[-1].item(), num_inference_steps)
             sigmas = torch.from_numpy(ratios)
 
         self.timesteps = torch.from_numpy(timesteps).to(device=device)
