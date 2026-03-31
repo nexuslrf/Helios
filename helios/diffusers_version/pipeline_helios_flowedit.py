@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import gc
-import math
-import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -102,7 +100,6 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
 
         # Zt_edit initialised to clean source at the entry stage.
         latents = latent_pyramid[flowedit_start_stage].to(device=device)
-        anchor_latents = latents
         batch_size = latents.shape[0]
 
         # Pre-cast history buffers once (avoid repeated .to() inside the inner loop).
@@ -117,6 +114,7 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
             # Keep pyramid tensors on GPU temporarily; free them after Zt_src is computed.
             x0_k    = latent_pyramid[i_s].to(device=device, dtype=torch.float32)
             noise_k = noise_pyramid[i_s].to(device=device, dtype=torch.float32)
+            x0_prev = None
             x0_prev_up = None
             if i_s == 0:
                 start_point = noise_k
@@ -126,10 +124,9 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
                 _Bp, _Cp, _Tp = x0_prev.shape[:3]
                 _flat = x0_prev.permute(0,2,1,3,4).reshape(_Bp*_Tp, _Cp, x0_prev.shape[-2], x0_prev.shape[-1])
                 x0_prev_up = F.interpolate(_flat, size=(tgt_h, tgt_w), mode="nearest").reshape(_Bp,_Tp,_Cp,tgt_h,tgt_w).permute(0,2,1,3,4)
-                del x0_prev, _flat
+                del _flat  # keep x0_prev alive for delta computation in inter-stage block
                 start_sigma_k = self.scheduler.start_sigmas[i_s]
                 start_point = start_sigma_k * noise_k + (1 - start_sigma_k) * x0_prev_up
-                # del x0_prev_up
 
             if i_s < pyramid_num_stages - 1:
                 end_sigma_k = self.scheduler.end_sigmas[i_s]
@@ -159,43 +156,22 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
             )
             timesteps = self.scheduler.timesteps
 
-            # Inter-stage: bilinear upsample Zt_edit (signal — no DMD re-noise for FlowEdit).
+            # Inter-stage: carry the EDIT DELTA (Zt_edit - x0_src_coarse) to the next resolution.
+            # Bilinear upsample of the *correction* (not raw latents) avoids block artifacts
+            # and anchors Zt_edit to the fine-res clean source, making Zt_tar = delta_up + Zt_src.
             if i_s > flowedit_start_stage:
-                # _fe_B, _fe_C, _fe_T, _h, _w = latents.shape
-                # _tgt_h, _tgt_w = _h * 2, _w * 2
-                # _flat = latents.float().permute(0,2,1,3,4).reshape(_fe_B*_fe_T, _fe_C, _h, _w)
-                # latents = (F.interpolate(_flat, size=(_tgt_h, _tgt_w), mode="bilinear")
-                #            .reshape(_fe_B, _fe_T, _fe_C, _tgt_h, _tgt_w)
-                #            .permute(0, 2, 1, 3, 4).to(torch.float32))
-                # del _flat
-
-                num_frames = latents.shape[2]
-                batch_size, num_channel, num_frames, _h, _w = latents.shape
-                height, width = _h * 2, _w * 2
-
-                latents = latents.permute(0, 2, 1, 3, 4).reshape(
-                    batch_size * num_frames, num_channel, _h, _w
-                )
-                latents = F.interpolate(latents, size=(height, width), mode="nearest")
-                latents = latents.reshape(batch_size, num_frames, num_channel, height, width).permute(0, 2, 1, 3, 4)
-                anchor_latents = latents
-                
-                # # Re-noise to fix block artifacts at upsampled resolution.
-                # ori_sigma = 1 - self.scheduler.ori_start_sigmas[i_s]
-                # gamma = self.scheduler.config.gamma
-                # alpha = 1 / (math.sqrt(1 + (1 / gamma)) * (1 - ori_sigma) + ori_sigma)
-                # beta = alpha * (1 - ori_sigma) / math.sqrt(gamma)
-
-                # batch_size, num_channel, num_frames, height, width = latents.shape
-                # if base_seed is not None:
-                #     _block_gen = torch.Generator(device=device).manual_seed(base_seed + chunk_frame_offset + i_s)
-                # else:
-                #     _block_gen = generator
-                # noise = self.sample_block_noise(
-                #     batch_size, num_channel, num_frames, height, width, patch_size, device, _block_gen
-                # )
-                # noise = noise.to(device=device, dtype=torch.float32)
-                # latents = alpha * latents + beta * noise
+                _fe_B, _fe_C, _fe_T, _h, _w = latents.shape
+                _tgt_h, _tgt_w = _h * 2, _w * 2
+                delta_edit = latents.float() - x0_prev.float()   # edit correction at coarse stage
+                _flat = delta_edit.permute(0,2,1,3,4).reshape(_fe_B*_fe_T, _fe_C, _h, _w)
+                delta_up = (F.interpolate(_flat, size=(_tgt_h, _tgt_w), mode="bilinear")
+                            .reshape(_fe_B, _fe_T, _fe_C, _tgt_h, _tgt_w)
+                            .permute(0, 2, 1, 3, 4))
+                del _flat, delta_edit
+                latents = (x0_k + delta_up).to(torch.float32)   # anchor to fine-res source + edit
+                del delta_up
+            if x0_prev is not None:
+                del x0_prev
 
             # Reset transformer's stateful KV cache at each stage boundary — caches from
             # the previous stage's resolution don't apply here and take significant VRAM.
@@ -241,34 +217,11 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
                 if _do_edit:
                     # Stage2-consistent forward process (same formula as training):
                     #   Zt_src = sigma_t * start_point + (1 - sigma_t) * end_point
-                    # Zt_tar replaces x0_k with Zt_edit (the running edited latent).
-                    Zt_src = (sigma_t * start_point + (1 - sigma_t) * end_point).to(torch.float32) # [B, C, T, H, W]
-                    # x0_tar = x0_prev_up * (1 - x0_tar_ratio[idx]) + x0_k * x0_tar_ratio[idx]
-                    x0_tar = sigma_t * x0_prev_up + (1 - sigma_t) * x0_k
-                    # if idx == 0 and i_s > flowedit_start_stage:
-                    #     Zt_tar = (latents.to(torch.float32)) # + x0_prev_up - x0_k.to(torch.float32))
-                    # else:   
-                    #     Zt_tar = (latents.to(torch.float32) + Zt_src - x0_tar.to(torch.float32))
-                    Zt_tar = (latents.to(torch.float32) + Zt_src - x0_tar.to(torch.float32))
-
-                    if idx == 0 and i_s > flowedit_start_stage:
-                        # Re-noise to fix block artifacts at upsampled resolution.
-                        ori_sigma = 1 - self.scheduler.ori_start_sigmas[i_s]
-                        gamma = self.scheduler.config.gamma
-                        alpha = 1 / (math.sqrt(1 + (1 / gamma)) * (1 - ori_sigma) + ori_sigma)
-                        beta = alpha * (1 - ori_sigma) / math.sqrt(gamma)
-
-                        batch_size, num_channel, num_frames, height, width = Zt_tar.shape
-                        if base_seed is not None:
-                            _block_gen = torch.Generator(device=device).manual_seed(base_seed + chunk_frame_offset + i_s)
-                        else:
-                            _block_gen = generator
-                        noise = self.sample_block_noise(
-                            batch_size, num_channel, num_frames, height, width, patch_size, device, _block_gen
-                        )
-                        noise = noise.to(device=device, dtype=torch.float32)
-                        # Zt_src = alpha * Zt_src + beta * noise
-                        Zt_tar = alpha * Zt_tar + beta * noise
+                    # After delta-based inter-stage init, latents = x0_k + delta_up, so:
+                    #   Zt_tar = latents + Zt_src - x0_k = delta_up + Zt_src
+                    # This is the pure FlowEdit formula: edit delta + source trajectory.
+                    Zt_src = (sigma_t * start_point + (1 - sigma_t) * end_point).to(torch.float32)
+                    Zt_tar = (latents.to(torch.float32) + Zt_src - x0_k.to(torch.float32))
 
                     if flowedit_src_neg_embeds is not None:
                         # FlowEdit: 2-4 calls; delete velocity intermediates ASAP.
