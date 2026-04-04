@@ -147,7 +147,7 @@ def main():
     source_video = load_video(args.video_path)
 
     video_tensor = pipe.video_processor.preprocess_video(source_video, height=args.height, width=args.width)
-    video_tensor = video_tensor.to(device=device, dtype=vae.dtype)
+    video_tensor = video_tensor.to(dtype=vae.dtype)
 
     latents_mean = (
         torch.tensor(vae.config.latents_mean).view(1, vae.config.z_dim, 1, 1, 1).to(device, vae.dtype)
@@ -167,13 +167,14 @@ def main():
     print("Encoding source video to latents...")
 
     X0_src = []
+    latents_mean_cpu, latents_std_cpu = latents_mean.cpu(), latents_std.cpu()
     with torch.no_grad():
         for k in range(num_chunks):
             chunk_start = start_frame + k * min_frames
             chunk_end = chunk_start + min_frames
             chunk = video_tensor[:, :, chunk_start:chunk_end]
-            z = vae.encode(chunk).latent_dist.sample(generator=generator)
-            z = (z - latents_mean) * latents_std
+            z = vae.encode(chunk.to(device=device)).latent_dist.sample(generator=generator).cpu()
+            z = (z - latents_mean_cpu) * latents_std_cpu
             X0_src.append(z.to(torch.float32))
     del video_tensor
     torch.cuda.empty_cache()
@@ -225,11 +226,17 @@ def main():
     batch_size, C = x0_ref.shape[0], x0_ref.shape[1]
     H_lat, W_lat = x0_ref.shape[-2], x0_ref.shape[-1]
 
-    history_latents = torch.zeros(
+    # Keep separate history streams for the two FlowEdit branches:
+    # source history for source-prompt/source-latent calls, and edited history for
+    # target-prompt/edited-latent calls. Using only one stream for both branches
+    # either corrupts the source reference or collapses later chunks back to source.
+    history_latents_src = torch.zeros(
         batch_size, C, num_history_latent_frames, H_lat, W_lat,
-        device=device, dtype=torch.float32,
+        dtype=torch.float32,
     )
-    image_latents = None
+    history_latents_tar = torch.zeros_like(history_latents_src)
+    image_latents_src = None
+    image_latents_tar = None
     output_frames = []
 
     # ── FlowEdit mode parameters ──────────────────────────────────────────────
@@ -272,21 +279,28 @@ def main():
             is_first_chunk = k == 0
 
             # Build history slices
-            lh_long, lh_mid, lh_1x = history_latents[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
+            lh_long_src, lh_mid_src, lh_1x_src = history_latents_src[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
+            lh_long_tar, lh_mid_tar, lh_1x_tar = history_latents_tar[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
             if keep_first_frame:
-                if image_latents is None and is_first_chunk:
-                    lh_prefix = torch.zeros_like(lh_1x[:, :, :1])
+                if image_latents_src is None and is_first_chunk:
+                    lh_prefix_src = torch.zeros_like(lh_1x_src[:, :, :1])
                 else:
-                    lh_prefix = image_latents
-                lh_short = torch.cat([lh_prefix, lh_1x], dim=2)
+                    lh_prefix_src = image_latents_src
+                if image_latents_tar is None and is_first_chunk:
+                    lh_prefix_tar = torch.zeros_like(lh_1x_tar[:, :, :1])
+                else:
+                    lh_prefix_tar = image_latents_tar
+                lh_short_src = torch.cat([lh_prefix_src, lh_1x_src], dim=2)
+                lh_short_tar = torch.cat([lh_prefix_tar, lh_1x_tar], dim=2)
             else:
-                lh_long, lh_mid, lh_short = history_latents[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
+                lh_long_src, lh_mid_src, lh_short_src = history_latents_src[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
+                lh_long_tar, lh_mid_tar, lh_short_tar = history_latents_tar[:, :, -num_history_latent_frames:].split(history_sizes, dim=2)
 
             from tqdm import tqdm
             with tqdm(total=total_steps, desc=f"chunk {k+1}/{num_chunks}") as pbar:
                 latents_out = pipe.stage2_sample(
                     # Pass X0_src as latents (full res); stage2_sample will downsample for FlowEdit init.
-                    latents=X0_src[k].to(transformer_dtype),
+                    latents=X0_src[k].to(transformer_dtype).to(device),
                     pyramid_num_stages=args.pyramid_num_stages,
                     pyramid_num_inference_steps_list=pyramid_steps,
                     # Target prompt embeds (used for Vt_tar)
@@ -297,9 +311,12 @@ def main():
                     indices_latents_history_short=indices_latents_history_short,
                     indices_latents_history_mid=indices_latents_history_mid,
                     indices_latents_history_long=indices_latents_history_long,
-                    latents_history_short=lh_short.to(transformer_dtype),
-                    latents_history_mid=lh_mid.to(transformer_dtype),
-                    latents_history_long=lh_long.to(transformer_dtype),
+                    latents_history_short=lh_short_src.to(device=device, dtype=transformer_dtype),
+                    latents_history_mid=lh_mid_src.to(device=device, dtype=transformer_dtype),
+                    latents_history_long=lh_long_src.to(device=device, dtype=transformer_dtype),
+                    latents_history_short_target=lh_short_tar.to(device=device, dtype=transformer_dtype),
+                    latents_history_mid_target=lh_mid_tar.to(device=device, dtype=transformer_dtype),
+                    latents_history_long_target=lh_long_tar.to(device=device, dtype=transformer_dtype),
                     device=device,
                     transformer_dtype=transformer_dtype,
                     generator=generator,
@@ -316,13 +333,19 @@ def main():
                 )
 
             latents_out = latents_out.to(torch.float32)
-            history_latents = torch.cat([history_latents, latents_out], dim=2)
+            latents_out_cpu = latents_out.cpu()
+            history_latents_src = torch.cat([history_latents_src, X0_src[k].to(dtype=torch.float32)], dim=2)
+            history_latents_tar = torch.cat([history_latents_tar, latents_out_cpu], dim=2)
             if keep_first_frame and is_first_chunk:
-                image_latents = latents_out[:, :, 0:1]
+                image_latents_src = X0_src[k][:, :, 0:1].to(dtype=torch.float32)
+                image_latents_tar = latents_out_cpu[:, :, 0:1].to(dtype=torch.float32)
 
             # Offload transformer blocks one-by-one to free GPU memory for VAE decode.
             # Strategy: load VAE first (so its footprint is counted), then check headroom.
             import gc as _gc
+            del lh_long_src, lh_mid_src, lh_short_src, lh_long_tar, lh_mid_tar, lh_short_tar, latents_out_cpu
+            _gc.collect()
+            torch.cuda.empty_cache()
             _vae_decode_headroom = int(9.0 * 1024**3)  # 9 GB: feat_cache (~4 GB) + conv3d peak (4.75 GB)
             _n_actually_offloaded = 0
             vae.to(device=device, dtype=torch.bfloat16)

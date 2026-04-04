@@ -45,6 +45,9 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
         latents_history_short=None,
         latents_history_mid=None,
         latents_history_long=None,
+        latents_history_short_target=None,
+        latents_history_mid_target=None,
+        latents_history_long_target=None,
         attention_kwargs=None,
         device=None,
         transformer_dtype=None,
@@ -103,9 +106,17 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
         batch_size = latents.shape[0]
 
         # Pre-cast history buffers once (avoid repeated .to() inside the inner loop).
-        lh_short = latents_history_short.to(torch.float32)
-        lh_mid   = latents_history_mid.to(torch.float32)
-        lh_long  = latents_history_long.to(torch.float32)
+        lh_short_src = latents_history_short.to(torch.float32)
+        lh_mid_src   = latents_history_mid.to(torch.float32)
+        lh_long_src  = latents_history_long.to(torch.float32)
+        if latents_history_short_target is None:
+            lh_short_tar = lh_short_src
+            lh_mid_tar = lh_mid_src
+            lh_long_tar = lh_long_src
+        else:
+            lh_short_tar = latents_history_short_target.to(torch.float32)
+            lh_mid_tar   = latents_history_mid_target.to(torch.float32)
+            lh_long_tar  = latents_history_long_target.to(torch.float32)
 
         patch_size = self.transformer.config.patch_size
 
@@ -181,9 +192,17 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
 
             # Define transformer call once per stage (captures constant stage-level state).
             @torch.no_grad()
-            def _fe_call(hidden, embeds, ctx_key, _ts=None):
+            def _fe_call(hidden, embeds, ctx_key, _ts=None, history_role="src"):
                 gc.collect()
                 torch.cuda.empty_cache()
+                if history_role == "tar":
+                    hist_short = lh_short_tar
+                    hist_mid = lh_mid_tar
+                    hist_long = lh_long_tar
+                else:
+                    hist_short = lh_short_src
+                    hist_mid = lh_mid_src
+                    hist_long = lh_long_src
                 with self.transformer.cache_context(ctx_key):
                     return self.transformer(
                         hidden_states=hidden.to(transformer_dtype),
@@ -195,9 +214,9 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
                         indices_latents_history_short=indices_latents_history_short,
                         indices_latents_history_mid=indices_latents_history_mid,
                         indices_latents_history_long=indices_latents_history_long,
-                        latents_history_short=lh_short.to(transformer_dtype),
-                        latents_history_mid=lh_mid.to(transformer_dtype),
-                        latents_history_long=lh_long.to(transformer_dtype),
+                        latents_history_short=hist_short.to(transformer_dtype),
+                        latents_history_mid=hist_mid.to(transformer_dtype),
+                        latents_history_long=hist_long.to(transformer_dtype),
                         **extra,
                     )[0]
 
@@ -225,18 +244,22 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
 
                     if flowedit_src_neg_embeds is not None:
                         # FlowEdit: 2-4 calls; delete velocity intermediates ASAP.
-                        v_tar_cond = _fe_call(Zt_tar, prompt_embeds, "fe_tar_cond", timestep).float()
+                        v_tar_cond = _fe_call(Zt_tar, prompt_embeds, "fe_tar_cond", timestep, history_role="tar").float()
                         if guidance_scale > 1:
-                            v_tar_uncond = _fe_call(Zt_tar, negative_prompt_embeds, "fe_tar_uncond", timestep).float()
+                            v_tar_uncond = _fe_call(
+                                Zt_tar, negative_prompt_embeds, "fe_tar_uncond", timestep, history_role="tar"
+                            ).float()
                             Vt_tar = v_tar_uncond + guidance_scale * (v_tar_cond - v_tar_uncond)
                             del v_tar_cond, v_tar_uncond
                         else:
                             Vt_tar = v_tar_cond
                             del v_tar_cond
                         del Zt_tar
-                        v_src_cond = _fe_call(Zt_src, flowedit_src_pos_embeds, "fe_src_cond", timestep).float()
+                        v_src_cond = _fe_call(Zt_src, flowedit_src_pos_embeds, "fe_src_cond", timestep, history_role="src").float()
                         if flowedit_src_gs > 1:
-                            v_src_uncond = _fe_call(Zt_src, flowedit_src_neg_embeds, "fe_src_uncond", timestep).float()
+                            v_src_uncond = _fe_call(
+                                Zt_src, flowedit_src_neg_embeds, "fe_src_uncond", timestep, history_role="src"
+                            ).float()
                             Vt_src = v_src_uncond + flowedit_src_gs * (v_src_cond - v_src_uncond)
                             del v_src_cond, v_src_uncond
                         else:
@@ -247,11 +270,13 @@ class HeliosPipelineFlowEdit(HeliosPipeline):
                         del Vt_tar, Vt_src
                     else:
                         # FlowAlign: 3-call classifier guidance (no source uncond).
-                        vq     = _fe_call(Zt_src, flowedit_src_pos_embeds, "fa_vq",     timestep).float()
-                        vp_tar = _fe_call(Zt_tar, prompt_embeds,           "fa_vp_tar", timestep).float()
+                        vq     = _fe_call(Zt_src, flowedit_src_pos_embeds, "fa_vq",     timestep, history_role="src").float()
+                        vp_tar = _fe_call(Zt_tar, prompt_embeds,           "fa_vp_tar", timestep, history_role="tar").float()
                         del Zt_tar
                         if guidance_scale > 1:
-                            vp_src = _fe_call(Zt_src, flowedit_src_pos_embeds, "fa_vp_src", timestep).float()
+                            vp_src = _fe_call(
+                                Zt_src, flowedit_src_pos_embeds, "fa_vp_src", timestep, history_role="src"
+                            ).float()
                             vp = vp_src + guidance_scale * (vp_tar - vp_src)
                             del vp_src
                         else:
